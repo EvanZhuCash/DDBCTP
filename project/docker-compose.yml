@@ -1,0 +1,33 @@
+
+services:
+  dolphindb:
+    image: dolphindb/dolphindb:v2.00.14.1
+    container_name: dolphindb
+    ports:
+      - "8848:8848"
+    command: ./start_server.sh
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8848"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    
+  demo_live:
+    build: .
+    depends_on:
+      dolphindb:
+        condition: service_healthy
+    environment:
+      - DDB_HOST=dolphindb
+      - DDB_PORT=8848
+    command: python demo_live.py
+  
+  demo_hist:
+    build: .
+    depends_on:
+      dolphindb:
+        condition: service_healthy
+    environment:
+      - DDB_HOST=dolphindb
+      - DDB_PORT=8848
+    command: python demo_hist.py

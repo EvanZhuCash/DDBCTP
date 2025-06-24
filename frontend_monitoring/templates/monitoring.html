@@ -1,0 +1,619 @@
+{% extends "base.html" %}
+
+{% block title %}系统监控 - DolphinDB CTP 监控系统{% endblock %}
+
+{% block page_title %}系统监控{% endblock %}
+
+{% block content %}
+<!-- 实时系统指标 -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">CPU使用率</h6>
+                        <h3 id="cpu-usage-display">0%</h3>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-microchip fa-2x"></i>
+                    </div>
+                </div>
+                <div class="progress mt-2" style="height: 4px;">
+                    <div class="progress-bar bg-white" id="cpu-progress" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">内存使用率</h6>
+                        <h3 id="memory-usage-display">0%</h3>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-memory fa-2x"></i>
+                    </div>
+                </div>
+                <div class="progress mt-2" style="height: 4px;">
+                    <div class="progress-bar bg-white" id="memory-progress" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">磁盘使用率</h6>
+                        <h3 id="disk-usage-display">0%</h3>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-hdd fa-2x"></i>
+                    </div>
+                </div>
+                <div class="progress mt-2" style="height: 4px;">
+                    <div class="progress-bar bg-white" id="disk-progress" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h6 class="card-title">DolphinDB</h6>
+                        <h3 id="ddb-status-display">
+                            <i class="fas fa-database"></i>
+                        </h3>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-server fa-2x"></i>
+                    </div>
+                </div>
+                <small id="ddb-status-text">检查中...</small>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 实时图表 -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-area me-2"></i>
+                    系统资源趋势
+                </h5>
+                <div class="btn-group btn-group-sm">
+                    <button class="btn btn-outline-primary active" onclick="setChartTimeRange('1h')">1小时</button>
+                    <button class="btn btn-outline-primary" onclick="setChartTimeRange('6h')">6小时</button>
+                    <button class="btn btn-outline-primary" onclick="setChartTimeRange('24h')">24小时</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="system-metrics-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-heartbeat me-2"></i>
+                    系统健康状态
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="health-status-list">
+                    <div class="text-center text-muted">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        检查系统健康状态...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 流表监控 -->
+<div class="row mb-4">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-table me-2"></i>
+                    流表监控
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-sm">
+                        <thead>
+                            <tr>
+                                <th>表名</th>
+                                <th>状态</th>
+                                <th>记录数</th>
+                                <th>最后更新</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stream-tables-tbody">
+                            <tr>
+                                <td colspan="4" class="text-center text-muted">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    加载流表信息...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-cogs me-2"></i>
+                    引擎状态
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="engines-status">
+                    <div class="text-center text-muted">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        检查引擎状态...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 性能指标详情 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-tachometer-alt me-2"></i>
+                    详细性能指标
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6>内存详情</h6>
+                        <ul class="list-unstyled">
+                            <li>总内存: <span id="memory-total">0 GB</span></li>
+                            <li>已用内存: <span id="memory-used">0 GB</span></li>
+                            <li>可用内存: <span id="memory-available">0 GB</span></li>
+                            <li>使用率: <span id="memory-percent">0%</span></li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>磁盘详情</h6>
+                        <ul class="list-unstyled">
+                            <li>总空间: <span id="disk-total">0 GB</span></li>
+                            <li>已用空间: <span id="disk-used">0 GB</span></li>
+                            <li>可用空间: <span id="disk-free">0 GB</span></li>
+                            <li>使用率: <span id="disk-percent">0%</span></li>
+                        </ul>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>网络状态</h6>
+                        <ul class="list-unstyled">
+                            <li>连接延迟: <span id="network-latency">0 ms</span></li>
+                            <li>连接状态: <span id="connection-status-text">检查中</span></li>
+                            <li>最后检查: <span id="last-check-time">-</span></li>
+                            <li>检查间隔: <span id="check-interval">5秒</span></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 警报设置模态框 -->
+<div class="modal fade" id="alertSettingsModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">警报设置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="alert-settings-form">
+                    <div class="mb-3">
+                        <label class="form-label">CPU使用率警报阈值 (%)</label>
+                        <input type="number" class="form-control" id="cpu-threshold" value="80" min="0" max="100">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">内存使用率警报阈值 (%)</label>
+                        <input type="number" class="form-control" id="memory-threshold" value="85" min="0" max="100">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">磁盘使用率警报阈值 (%)</label>
+                        <input type="number" class="form-control" id="disk-threshold" value="90" min="0" max="100">
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="enable-email-alerts" checked>
+                            <label class="form-check-label" for="enable-email-alerts">
+                                启用邮件警报
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveAlertSettings()">保存设置</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 浮动操作按钮 -->
+<div class="position-fixed bottom-0 end-0 p-3">
+    <button class="btn btn-primary btn-lg rounded-circle" onclick="showAlertSettings()" title="警报设置">
+        <i class="fas fa-bell"></i>
+    </button>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let socket;
+    let systemChart;
+    let metricsData = [];
+    let chartTimeRange = '1h';
+    
+    // 初始化WebSocket连接
+    function initWebSocket() {
+        socket = io('/monitor');
+        
+        socket.on('connect', function() {
+            console.log('监控WebSocket连接成功');
+            updateConnectionStatus(true);
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('监控WebSocket连接断开');
+            updateConnectionStatus(false);
+        });
+        
+        socket.on('system_metrics', function(data) {
+            console.log('收到系统指标:', data);
+            updateSystemMetrics(data);
+            updateSystemChart(data);
+        });
+    }
+    
+    // 更新连接状态
+    function updateConnectionStatus(connected) {
+        const statusElement = document.getElementById('connection-status');
+        const textElement = document.getElementById('connection-text');
+        
+        if (connected) {
+            statusElement.className = 'status-indicator status-online';
+            textElement.textContent = '系统在线';
+        } else {
+            statusElement.className = 'status-indicator status-offline';
+            textElement.textContent = '连接断开';
+        }
+    }
+    
+    // 初始化系统指标图表
+    function initSystemChart() {
+        const ctx = document.getElementById('system-metrics-chart').getContext('2d');
+        
+        systemChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'CPU使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    },
+                    {
+                        label: '内存使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    },
+                    {
+                        label: '磁盘使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 205, 86)',
+                        backgroundColor: 'rgba(255, 205, 86, 0.1)',
+                        tension: 0.4,
+                        fill: true
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                },
+                interaction: {
+                    intersect: false,
+                    mode: 'index'
+                }
+            }
+        });
+    }
+    
+    // 更新系统指标
+    function updateSystemMetrics(data) {
+        if (!data.system) return;
+        
+        const system = data.system;
+        
+        // 更新指标卡片
+        document.getElementById('cpu-usage-display').textContent = formatPercent(system.cpu_percent);
+        document.getElementById('memory-usage-display').textContent = formatPercent(system.memory_percent);
+        document.getElementById('disk-usage-display').textContent = formatPercent(system.disk_percent);
+        
+        // 更新进度条
+        document.getElementById('cpu-progress').style.width = system.cpu_percent + '%';
+        document.getElementById('memory-progress').style.width = system.memory_percent + '%';
+        document.getElementById('disk-progress').style.width = system.disk_percent + '%';
+        
+        // 更新DolphinDB状态
+        const ddbConnected = data.dolphindb && data.dolphindb.connected;
+        const ddbStatusDisplay = document.getElementById('ddb-status-display');
+        const ddbStatusText = document.getElementById('ddb-status-text');
+        
+        if (ddbConnected) {
+            ddbStatusDisplay.innerHTML = '<i class="fas fa-check-circle"></i>';
+            ddbStatusText.textContent = '连接正常';
+        } else {
+            ddbStatusDisplay.innerHTML = '<i class="fas fa-times-circle"></i>';
+            ddbStatusText.textContent = '连接断开';
+        }
+        
+        // 更新详细信息
+        document.getElementById('memory-total').textContent = formatNumber(system.memory_total_gb, 1) + ' GB';
+        document.getElementById('memory-used').textContent = formatNumber(system.memory_used_gb, 1) + ' GB';
+        document.getElementById('memory-available').textContent = formatNumber(system.memory_total_gb - system.memory_used_gb, 1) + ' GB';
+        document.getElementById('memory-percent').textContent = formatPercent(system.memory_percent);
+        
+        document.getElementById('disk-free').textContent = formatNumber(system.disk_free_gb, 1) + ' GB';
+        document.getElementById('disk-percent').textContent = formatPercent(system.disk_percent);
+        
+        document.getElementById('last-check-time').textContent = new Date().toLocaleTimeString('zh-CN');
+        
+        // 更新流表状态
+        if (data.dolphindb && data.dolphindb.stream_tables) {
+            updateStreamTablesDisplay(data.dolphindb.stream_tables);
+        }
+    }
+    
+    // 更新系统图表
+    function updateSystemChart(data) {
+        if (!systemChart || !data.system) return;
+        
+        const now = new Date().toLocaleTimeString();
+        const maxDataPoints = getMaxDataPoints();
+        
+        // 保持指定数量的数据点
+        if (systemChart.data.labels.length >= maxDataPoints) {
+            systemChart.data.labels.shift();
+            systemChart.data.datasets.forEach(dataset => {
+                dataset.data.shift();
+            });
+        }
+        
+        systemChart.data.labels.push(now);
+        systemChart.data.datasets[0].data.push(data.system.cpu_percent);
+        systemChart.data.datasets[1].data.push(data.system.memory_percent);
+        systemChart.data.datasets[2].data.push(data.system.disk_percent);
+        
+        systemChart.update('none');
+        
+        // 存储数据用于时间范围切换
+        metricsData.push({
+            timestamp: new Date(),
+            cpu: data.system.cpu_percent,
+            memory: data.system.memory_percent,
+            disk: data.system.disk_percent
+        });
+        
+        // 保持最近24小时的数据
+        const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000);
+        metricsData = metricsData.filter(item => item.timestamp > cutoffTime);
+    }
+    
+    // 获取最大数据点数
+    function getMaxDataPoints() {
+        switch (chartTimeRange) {
+            case '1h': return 60;   // 1小时，每分钟一个点
+            case '6h': return 72;   // 6小时，每5分钟一个点
+            case '24h': return 96;  // 24小时，每15分钟一个点
+            default: return 60;
+        }
+    }
+    
+    // 设置图表时间范围
+    function setChartTimeRange(range) {
+        chartTimeRange = range;
+        
+        // 更新按钮状态
+        document.querySelectorAll('.btn-group .btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        event.target.classList.add('active');
+        
+        // 重新绘制图表
+        redrawChartWithTimeRange(range);
+    }
+    
+    // 根据时间范围重新绘制图表
+    function redrawChartWithTimeRange(range) {
+        if (!systemChart) return;
+        
+        const now = new Date();
+        let cutoffTime;
+        let interval;
+        
+        switch (range) {
+            case '1h':
+                cutoffTime = new Date(now.getTime() - 60 * 60 * 1000);
+                interval = 60 * 1000; // 1分钟
+                break;
+            case '6h':
+                cutoffTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+                interval = 5 * 60 * 1000; // 5分钟
+                break;
+            case '24h':
+                cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                interval = 15 * 60 * 1000; // 15分钟
+                break;
+        }
+        
+        // 过滤和聚合数据
+        const filteredData = metricsData.filter(item => item.timestamp > cutoffTime);
+        const aggregatedData = aggregateDataByInterval(filteredData, interval);
+        
+        // 更新图表
+        systemChart.data.labels = aggregatedData.map(item => item.timestamp.toLocaleTimeString());
+        systemChart.data.datasets[0].data = aggregatedData.map(item => item.cpu);
+        systemChart.data.datasets[1].data = aggregatedData.map(item => item.memory);
+        systemChart.data.datasets[2].data = aggregatedData.map(item => item.disk);
+        
+        systemChart.update();
+    }
+    
+    // 按时间间隔聚合数据
+    function aggregateDataByInterval(data, interval) {
+        if (data.length === 0) return [];
+        
+        const aggregated = [];
+        const startTime = data[0].timestamp.getTime();
+        
+        for (let i = 0; i < data.length; i++) {
+            const currentTime = data[i].timestamp.getTime();
+            const intervalIndex = Math.floor((currentTime - startTime) / interval);
+            
+            if (!aggregated[intervalIndex]) {
+                aggregated[intervalIndex] = {
+                    timestamp: new Date(startTime + intervalIndex * interval),
+                    cpu: [],
+                    memory: [],
+                    disk: []
+                };
+            }
+            
+            aggregated[intervalIndex].cpu.push(data[i].cpu);
+            aggregated[intervalIndex].memory.push(data[i].memory);
+            aggregated[intervalIndex].disk.push(data[i].disk);
+        }
+        
+        // 计算平均值
+        return aggregated.filter(item => item).map(item => ({
+            timestamp: item.timestamp,
+            cpu: item.cpu.reduce((a, b) => a + b, 0) / item.cpu.length,
+            memory: item.memory.reduce((a, b) => a + b, 0) / item.memory.length,
+            disk: item.disk.reduce((a, b) => a + b, 0) / item.disk.length
+        }));
+    }
+    
+    // 更新流表显示
+    function updateStreamTablesDisplay(streamTables) {
+        const tbody = document.getElementById('stream-tables-tbody');
+        
+        if (!streamTables || Object.keys(streamTables).length === 0) {
+            tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">暂无流表数据</td></tr>';
+            return;
+        }
+        
+        let html = '';
+        for (const [tableName, status] of Object.entries(streamTables)) {
+            const statusBadge = status.exists ? 
+                '<span class="badge bg-success">正常</span>' : 
+                '<span class="badge bg-danger">不存在</span>';
+            
+            html += `
+                <tr>
+                    <td><code>${tableName}</code></td>
+                    <td>${statusBadge}</td>
+                    <td>${formatNumber(status.row_count, 0)}</td>
+                    <td><small class="text-muted">刚刚</small></td>
+                </tr>
+            `;
+        }
+        
+        tbody.innerHTML = html;
+    }
+    
+    // 显示警报设置
+    function showAlertSettings() {
+        const modal = new bootstrap.Modal(document.getElementById('alertSettingsModal'));
+        modal.show();
+    }
+    
+    // 保存警报设置
+    function saveAlertSettings() {
+        const cpuThreshold = document.getElementById('cpu-threshold').value;
+        const memoryThreshold = document.getElementById('memory-threshold').value;
+        const diskThreshold = document.getElementById('disk-threshold').value;
+        const enableEmail = document.getElementById('enable-email-alerts').checked;
+        
+        // 这里应该调用API保存设置
+        console.log('保存警报设置:', {
+            cpuThreshold,
+            memoryThreshold,
+            diskThreshold,
+            enableEmail
+        });
+        
+        showNotification('警报设置已保存', 'success');
+        
+        const modal = bootstrap.Modal.getInstance(document.getElementById('alertSettingsModal'));
+        modal.hide();
+    }
+    
+    // 刷新页面数据
+    window.refreshPageData = function() {
+        // WebSocket会自动更新数据，这里可以手动触发一次
+        showNotification('数据已刷新', 'success');
+    };
+    
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        initWebSocket();
+        initSystemChart();
+    });
+</script>
+{% endblock %}

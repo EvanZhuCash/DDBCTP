@@ -1,0 +1,105 @@
+login("admin", `123456)
+share streamTable(1000:0, `sym`timestamp`price`vol, [SYMBOL, TIMESTAMP, DOUBLE, INT]) as tickStream
+share streamTable(1000:0, `sym`timestamp`price`qty`dir`offset, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL, SYMBOL]) as trades
+positionTable = keyedTable(`sym, 1:0, `sym`qty`price`dir, [SYMBOL, INT, DOUBLE, SYMBOL])
+share streamTable(1:0, `sym`timestamp`price`pnl`dir, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, SYMBOL]) as unrealized_positions
+share streamTable(1:0, `sym`timestamps_close`price_open`price_close`qty`pnl, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, INT, DOUBLE]) as realized_positions
+
+// Position queue per symbol
+positions = dict(SYMBOL, ANY)
+
+x1 = table(1:0, `sym`timestamp`price`qty`dir`offset, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL, SYMBOL])
+
+def updatePosition(mutable positions, mutable positionTable, mutable realized_positions, mutable x1, msg){
+    sym = msg.sym[0]
+    vol = msg.qty[0]
+    timestamp = msg.timestamp[0]
+    price = msg.price[0]
+    dir = msg.dir[0]
+    offset = msg.offset[0]
+    key = sym + "_" + dir
+    pre_key = ""
+    if (!(key in positions.keys())){
+        positions[key] = table(1:0, `time1`vol1`price1, [TIMESTAMP, INT, DOUBLE])
+    }
+    if (offset == "OPEN"){
+        // Enqueue
+        positions[key] = positions[key].append!(table(timestamp as time1, vol as vol1, price as price1)) 
+    } else if (offset == "CLOSE"){
+        // Dequeue
+        pre_dir = iif(dir == "LONG", "SELL", "LONG")
+        pre_key = sym + "_" + pre_dir
+        queue = positions[pre_key]
+        remaining = vol
+        cost = 0.0
+        closedVol = 0
+        pnl = 0.0
+        irow = 0
+        do {
+            qVol = queue.vol1[irow]
+            qPrice = queue.price1[irow]
+            if (qVol <= remaining){
+                cost += qVol * qPrice
+                remaining -= qVol
+                closedVol += qVol
+                irow += 1
+                pnl += iif(dir == "LONG", (cost - closedVol * price), (closedVol * price - cost))
+            } else {
+                cost += remaining * qPrice
+                update positions[pre_key] set vol1 = vol1 - remaining where time1 = time1[irow]
+                closedVol += remaining
+                remaining = 0
+                pnl += iif(dir == "LONG", (cost - closedVol * price), (closedVol * price - cost))
+            }
+        } while (remaining > 0 && irow < size(queue))
+        if (irow > 0){
+            positions[pre_key] = positions[pre_key].slice(irow:)
+        }
+        key = pre_key
+        avg_open = cost / closedVol
+        // append realized interests
+        insert into realized_positions values(sym, timestamp, avg_open, price, vol, pnl)
+    }
+    // summarize open positions
+    key_position = iif(offset == "OPEN", key, pre_key)
+    queue = positions[key_position]
+    if (size(queue) > 0) {
+        totalVol = sum(queue.vol1)
+        totalCost = sum(queue.vol1 * queue.price1)
+        avgPrice = totalCost / totalVol
+        sym, dir = split(key_position, "_")
+        insert into positionTable values(sym, totalVol, avgPrice, dir)
+    }
+}
+
+subscribeTable(tableName="trades", actionName="trade_positions", offset=-1, handler=updatePosition{positions, positionTable, realized_positions, x1}, msgAsTable=true)
+
+def pnl_calc(cur_price, cost_price, val, dir){
+    return iif(dir=="LONG", val*(cur_price-cost_price), val*(cost_price-cur_price))
+}
+
+LjEngine = createLookupJoinEngine(name="position_lookforjoin", leftTable=tickStream, rightTable=positionTable, outputTable=unrealized_positions, metrics=<[tickStream.timestamp, tickStream.price, pnl_calc(tickStream.price, positionTable.price, qty, dir), dir]>, matchingColumn=`sym, checkTimes=1s)
+subscribeTable(tableName="tickStream", actionName="unrealized_position", offset=-1, handler=appendForJoin{LjEngine, true}, msgAsTable=true)
+
+td=loadText("./IC2311_trade.csv")
+tt=loadText("./IC2311_tick_demo.csv")
+
+for (i in 0..50){
+    insert into tickStream values(tt.slice(i).values())
+    if (tt.slice(i).tradetime in td.tradetime){
+        temp_ = select * from td where td.tradetime=tt.slice(i).tradetime
+        trades.append!(temp_)
+        sleep(1000)
+    }
+    sleep(100)
+}
+
+unsubscribeTable(tableName="trades", actionName="trade_positions")
+unsubscribeTable(tableName="tickStream", actionName="unrealized_position")
+dropStreamTable(`trades)
+dropStreamTable(`tickStream)
+dropStreamTable(`unrealized_positions)
+dropStreamTable(`realized_positions)
+DROP TABLE `positionTable
+DROP TABLE `tt
+dropStreamEngine(`position_lookforjoin)

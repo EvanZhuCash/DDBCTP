@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+
+{% block title %}总览 - DolphinDB CTP 监控系统{% endblock %}
+
+{% block page_title %}系统总览{% endblock %}
+
+{% block content %}
+<!-- 系统状态卡片 -->
+<div class="row mb-4">
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="metric-label">DolphinDB状态</div>
+                        <div class="metric-value" id="ddb-status">
+                            <i class="fas fa-database"></i>
+                        </div>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-server fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="metric-label">活跃策略</div>
+                        <div class="metric-value" id="active-strategies">0</div>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-cogs fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="metric-label">内存使用率</div>
+                        <div class="metric-value" id="memory-usage">0%</div>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-memory fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card metric-card">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <div class="metric-label">CPU使用率</div>
+                        <div class="metric-value" id="cpu-usage">0%</div>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-microchip fa-2x opacity-75"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 图表区域 -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-line me-2"></i>
+                    系统性能趋势
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="performance-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-table me-2"></i>
+                    流表状态
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="stream-tables-status">
+                    <div class="text-center text-muted">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        加载中...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 策略性能概览 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-bar me-2"></i>
+                    策略性能概览
+                </h5>
+                <button class="btn btn-sm btn-outline-primary" onclick="refreshStrategyPerformance()">
+                    <i class="fas fa-sync-alt"></i> 刷新
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>策略名称</th>
+                                <th>品种</th>
+                                <th>PnL</th>
+                                <th>NAV</th>
+                                <th>Sharpe比率</th>
+                                <th>最大回撤</th>
+                                <th>胜率</th>
+                                <th>交易次数</th>
+                                <th>状态</th>
+                            </tr>
+                        </thead>
+                        <tbody id="strategy-performance-table">
+                            <tr>
+                                <td colspan="9" class="text-center text-muted">
+                                    <i class="fas fa-spinner fa-spin"></i>
+                                    加载策略性能数据...
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 最近警报 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    最近警报
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="recent-alerts">
+                    <div class="text-center text-muted">
+                        <i class="fas fa-check-circle text-success"></i>
+                        暂无警报
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let performanceChart;
+    let systemMetrics = [];
+    
+    // 初始化性能图表
+    function initPerformanceChart() {
+        const ctx = document.getElementById('performance-chart').getContext('2d');
+        
+        performanceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'CPU使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        tension: 0.4
+                    },
+                    {
+                        label: '内存使用率 (%)',
+                        data: [],
+                        borderColor: 'rgb(54, 162, 235)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 100
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                }
+            }
+        });
+    }
+    
+    // 更新性能图表
+    function updatePerformanceChart(metrics) {
+        if (!performanceChart || !metrics.system) return;
+        
+        const now = new Date().toLocaleTimeString();
+        
+        // 保持最近20个数据点
+        if (performanceChart.data.labels.length >= 20) {
+            performanceChart.data.labels.shift();
+            performanceChart.data.datasets[0].data.shift();
+            performanceChart.data.datasets[1].data.shift();
+        }
+        
+        performanceChart.data.labels.push(now);
+        performanceChart.data.datasets[0].data.push(metrics.system.cpu_percent);
+        performanceChart.data.datasets[1].data.push(metrics.system.memory_percent);
+        
+        performanceChart.update('none');
+    }
+    
+    // 更新系统状态卡片
+    function updateSystemCards(metrics) {
+        if (!metrics.system) return;
+        
+        // DolphinDB状态
+        const ddbStatus = document.getElementById('ddb-status');
+        if (metrics.dolphindb && metrics.dolphindb.connected) {
+            ddbStatus.innerHTML = '<i class="fas fa-check-circle text-success"></i> 在线';
+        } else {
+            ddbStatus.innerHTML = '<i class="fas fa-times-circle text-danger"></i> 离线';
+        }
+        
+        // 内存使用率
+        document.getElementById('memory-usage').textContent = formatPercent(metrics.system.memory_percent);
+        
+        // CPU使用率
+        document.getElementById('cpu-usage').textContent = formatPercent(metrics.system.cpu_percent);
+    }
+    
+    // 更新流表状态
+    function updateStreamTablesStatus(streamTables) {
+        const container = document.getElementById('stream-tables-status');
+        
+        if (!streamTables) {
+            container.innerHTML = '<div class="text-center text-muted">无法获取流表状态</div>';
+            return;
+        }
+        
+        let html = '';
+        for (const [tableName, status] of Object.entries(streamTables)) {
+            const statusIcon = status.exists ? 
+                '<i class="fas fa-check-circle text-success"></i>' : 
+                '<i class="fas fa-times-circle text-danger"></i>';
+            
+            html += `
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        ${statusIcon}
+                        <span class="ms-2">${tableName}</span>
+                    </div>
+                    <span class="badge bg-secondary">${formatNumber(status.row_count, 0)}</span>
+                </div>
+            `;
+        }
+        
+        container.innerHTML = html;
+    }
+    
+    // 加载策略性能数据
+    function loadStrategyPerformance() {
+        fetch('/api/strategy/performance')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateStrategyPerformanceTable(data.data);
+                    updateActiveStrategiesCount(data.data);
+                } else {
+                    console.error('加载策略性能失败:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('加载策略性能错误:', error);
+            });
+    }
+    
+    // 更新策略性能表格
+    function updateStrategyPerformanceTable(performanceData) {
+        const tbody = document.getElementById('strategy-performance-table');
+        
+        if (!performanceData || performanceData.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="9" class="text-center text-muted">暂无策略性能数据</td>
+                </tr>
+            `;
+            return;
+        }
+        
+        let html = '';
+        performanceData.slice(0, 10).forEach(item => {  // 只显示最近10条
+            const pnlClass = item.pnl >= 0 ? 'text-success' : 'text-danger';
+            const statusBadge = item.pnl >= 0 ? 
+                '<span class="badge bg-success">盈利</span>' : 
+                '<span class="badge bg-danger">亏损</span>';
+            
+            html += `
+                <tr>
+                    <td><strong>${item.strategy_name}</strong></td>
+                    <td>${item.symbol}</td>
+                    <td class="${pnlClass}">${formatNumber(item.pnl)}</td>
+                    <td>${formatNumber(item.nav, 4)}</td>
+                    <td>${formatNumber(item.sharpe, 3)}</td>
+                    <td>${formatPercent(item.max_drawdown * 100)}</td>
+                    <td>${formatPercent(item.win_rate * 100)}</td>
+                    <td>${item.total_trades}</td>
+                    <td>${statusBadge}</td>
+                </tr>
+            `;
+        });
+        
+        tbody.innerHTML = html;
+    }
+    
+    // 更新活跃策略数量
+    function updateActiveStrategiesCount(performanceData) {
+        const activeCount = performanceData ? performanceData.length : 0;
+        document.getElementById('active-strategies').textContent = activeCount;
+    }
+    
+    // 加载系统状态
+    function loadSystemStatus() {
+        fetch('/api/system/status')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateSystemCards(data.data);
+                    updatePerformanceChart(data.data);
+                    
+                    if (data.data.dolphindb && data.data.dolphindb.stream_tables) {
+                        updateStreamTablesStatus(data.data.dolphindb.stream_tables);
+                    }
+                } else {
+                    console.error('加载系统状态失败:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('加载系统状态错误:', error);
+            });
+    }
+    
+    // 刷新策略性能数据
+    function refreshStrategyPerformance() {
+        loadStrategyPerformance();
+        showNotification('策略性能数据已刷新', 'success');
+    }
+    
+    // 刷新页面数据
+    window.refreshPageData = function() {
+        loadSystemStatus();
+        loadStrategyPerformance();
+        showNotification('数据已刷新', 'success');
+    };
+    
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        initPerformanceChart();
+        loadSystemStatus();
+        loadStrategyPerformance();
+        
+        // 每30秒自动刷新系统状态
+        setInterval(loadSystemStatus, 30000);
+        
+        // 每60秒自动刷新策略性能
+        setInterval(loadStrategyPerformance, 60000);
+    });
+</script>
+{% endblock %}

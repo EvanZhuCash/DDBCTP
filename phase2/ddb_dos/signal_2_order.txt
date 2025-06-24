@@ -1,0 +1,64 @@
+tickStream = streamTable(100:0, `symbol`timestamp`price`volume, [SYMBOL, TIMESTAMP, DOUBLE, INT])
+twapOrders = streamTable(100:0, `orderID`symbol`timestamp`orderPrice`orderVolume`direction, [INT, SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL])
+share tickStream as tickStream_1
+share twapOrders as twapOrders_1
+twapConfig = dict(STRING, ANY)
+
+
+twapConfig["symbol"] = "IC2311"
+twapConfig["totalVolume"] = 100
+twapConfig["startTime"] = 2023.10.31T09:30:00
+twapConfig["endTime"] = 2023.10.31T09:40:00
+twapConfig["numSlice"] = 10
+twapConfig["intervalSec"] = (twapConfig["endTime"] - twapConfig["startTime"]) / twapConfig["numSlice"]
+twapConfig["volumePerSlice"] = twapConfig["totalVolume"] / twapConfig["numSlice"]
+twapConfig["direction"] = "LONG"
+
+// keep track of which slice has been sent
+processedSlices = dict(INT, BOOL)
+
+
+def twapHandler(mutable twapOrders, twapConfig, mutable processedSlices, msg){
+    sym = msg.symbol[0]
+    ts = msg.timestamp[0]
+    px = msg.price[0]
+    
+    
+    if (sym == twapConfig["symbol"]) {
+        idx = floor((ts - twapConfig["startTime"])/twapConfig["intervalSec"])
+        if (!(idx in processedSlices.keys()) && (idx >= 0) && (idx < twapConfig["numSlice"])){
+            processedSlices[idx] = true
+            dir = twapConfig["direction"]
+            orderVol = twapConfig["volumePerSlice"]
+            orderID = idx + 1
+            insert into twapOrders values(orderID, sym, ts, px, orderVol, dir)
+        }
+    }
+}
+
+subscribeTable(tableName="tickStream_1", actionName="twapHandler", offset=-1, handler=twapHandler{twapOrders, twapConfig, processedSlices}, msgAsTable=true)
+
+insert into tickStream values("IC2311", 2023.10.31T09:30:05, 5530.2, 5)
+insert into tickStream values("IC2311", 2023.10.31T09:31:10, 5531.4, 3)
+insert into tickStream values("IC2311", 2023.10.31T09:31:20, 5532.4, 6)
+insert into tickStream values("IC2311", 2023.10.31T09:34:20, 5535.4, 2)
+insert into tickStream values("IC2311", 2023.10.31T09:36:20, 5535.4, 2)
+insert into tickStream values("IC2311", 2023.10.31T09:38:20, 5535.4, 2)
+
+dropStreamTable(`tickStream_1)
+unsubscribeTable(tableName=`tickStream_1, actionName=`twapHandler)
+dropStreamTable(`twapOrders_1)
+twapHandler(tickStream)
+undef(`tickStream_1, SHARED)
+DROP TABLE tickStream
+
+DROP TABLE idx_table_1
+DROP TABLE idx_table_2
+DROP TABLE twapOrders
+undef(`twapConfig)
+undef(`processedSlices)
+processedSlices[0] = true
+(2023.10.31T09:31:10 - twapConfig["startTime"])/twapConfig["intervalSec"]
+typestr(processedSlices.keys())
+size(processedSlices.keys())
+processedSlices.keys()[0]

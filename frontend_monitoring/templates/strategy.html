@@ -1,0 +1,569 @@
+{% extends "base.html" %}
+
+{% block title %}策略控制 - DolphinDB CTP 监控系统{% endblock %}
+
+{% block page_title %}策略控制面板{% endblock %}
+
+{% block content %}
+<!-- 策略统计卡片 -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-primary">总策略数</h5>
+                <h2 class="text-primary" id="total-strategies">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-success">活跃策略</h5>
+                <h2 class="text-success" id="active-strategies-count">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-info">监控品种</h5>
+                <h2 class="text-info" id="total-symbols">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center">
+            <div class="card-body">
+                <h5 class="card-title text-warning">订阅数量</h5>
+                <h2 class="text-warning" id="active-subscriptions">0</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 策略控制矩阵 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-th me-2"></i>
+                    策略控制矩阵
+                </h5>
+                <div>
+                    <button class="btn btn-sm btn-success me-2" onclick="enableAllStrategies()">
+                        <i class="fas fa-play"></i> 全部启用
+                    </button>
+                    <button class="btn btn-sm btn-danger me-2" onclick="disableAllStrategies()">
+                        <i class="fas fa-stop"></i> 全部停用
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="refreshStrategyMatrix()">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="strategy-matrix">
+                    <div id="strategy-matrix-container">
+                        <div class="text-center text-muted">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            加载策略矩阵...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 策略详细信息 -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-line me-2"></i>
+                    策略实时性能
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="strategy-performance-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-list me-2"></i>
+                    策略操作日志
+                </h5>
+            </div>
+            <div class="card-body" style="max-height: 350px; overflow-y: auto;">
+                <div id="strategy-logs">
+                    <div class="text-center text-muted">
+                        暂无操作记录
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 策略配置模态框 -->
+<div class="modal fade" id="strategyConfigModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">策略配置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="strategy-config-form">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">策略名称</label>
+                                <input type="text" class="form-control" id="config-strategy-name" readonly>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">交易品种</label>
+                                <input type="text" class="form-control" id="config-symbol" readonly>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">风险限额</label>
+                                <input type="number" class="form-control" id="config-risk-limit" value="100000">
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">最大持仓</label>
+                                <input type="number" class="form-control" id="config-max-position" value="100">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">策略参数 (JSON格式)</label>
+                        <textarea class="form-control" id="config-parameters" rows="4">
+{
+  "period": 20,
+  "multiplier": 2.0,
+  "stop_loss": 0.02,
+  "take_profit": 0.05
+}
+                        </textarea>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveStrategyConfig()">保存配置</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let socket;
+    let strategyChart;
+    let strategyMatrix = {};
+    let strategyLogs = [];
+    
+    // 初始化WebSocket连接
+    function initWebSocket() {
+        socket = io('/strategy');
+        
+        socket.on('connect', function() {
+            console.log('策略WebSocket连接成功');
+            updateConnectionStatus(true);
+        });
+        
+        socket.on('disconnect', function() {
+            console.log('策略WebSocket连接断开');
+            updateConnectionStatus(false);
+        });
+        
+        socket.on('strategy_updated', function(data) {
+            console.log('策略状态更新:', data);
+            addStrategyLog(`策略 ${data.strategy} (${data.symbol}) ${data.enabled ? '启用' : '停用'}`);
+            refreshStrategyMatrix();
+        });
+    }
+    
+    // 更新连接状态
+    function updateConnectionStatus(connected) {
+        const statusElement = document.getElementById('connection-status');
+        const textElement = document.getElementById('connection-text');
+        
+        if (connected) {
+            statusElement.className = 'status-indicator status-online';
+            textElement.textContent = '系统在线';
+        } else {
+            statusElement.className = 'status-indicator status-offline';
+            textElement.textContent = '连接断开';
+        }
+    }
+    
+    // 初始化策略性能图表
+    function initStrategyChart() {
+        const ctx = document.getElementById('strategy-performance-chart').getContext('2d');
+        
+        strategyChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: []
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: false
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                }
+            }
+        });
+    }
+    
+    // 加载策略矩阵
+    function loadStrategyMatrix() {
+        fetch('/api/strategy/matrix')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    strategyMatrix = data.data;
+                    renderStrategyMatrix(data.data);
+                    updateStrategyStats(data.data);
+                } else {
+                    console.error('加载策略矩阵失败:', data.error);
+                    showNotification('加载策略矩阵失败: ' + data.error, 'danger');
+                }
+            })
+            .catch(error => {
+                console.error('加载策略矩阵错误:', error);
+                showNotification('网络错误，请检查连接', 'danger');
+            });
+    }
+    
+    // 渲染策略矩阵
+    function renderStrategyMatrix(data) {
+        const container = document.getElementById('strategy-matrix-container');
+        
+        if (!data.strategies || !data.symbols) {
+            container.innerHTML = '<div class="text-center text-muted">暂无策略数据</div>';
+            return;
+        }
+        
+        let html = `
+            <div class="table-responsive">
+                <table class="table table-bordered table-hover">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>策略/品种</th>
+        `;
+        
+        // 添加品种列头
+        data.symbols.forEach(symbol => {
+            html += `<th class="text-center">${symbol}</th>`;
+        });
+        
+        html += `
+                            <th class="text-center">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+        
+        // 添加策略行
+        data.strategies.forEach(strategy => {
+            html += `
+                <tr>
+                    <td class="fw-bold">${strategy}</td>
+            `;
+            
+            data.symbols.forEach(symbol => {
+                const enabled = data.matrix[strategy] && data.matrix[strategy][symbol];
+                const toggleClass = enabled ? 'enabled' : 'disabled';
+                const toggleText = enabled ? '1' : '0';
+                
+                html += `
+                    <td class="text-center">
+                        <button class="strategy-toggle ${toggleClass}" 
+                                onclick="toggleStrategy('${strategy}', '${symbol}')"
+                                title="${enabled ? '点击停用' : '点击启用'}">
+                            ${toggleText}
+                        </button>
+                    </td>
+                `;
+            });
+            
+            html += `
+                    <td class="text-center">
+                        <button class="btn btn-sm btn-outline-primary" 
+                                onclick="configureStrategy('${strategy}')"
+                                title="配置策略">
+                            <i class="fas fa-cog"></i>
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+        
+        html += `
+                    </tbody>
+                </table>
+            </div>
+        `;
+        
+        container.innerHTML = html;
+    }
+    
+    // 更新策略统计
+    function updateStrategyStats(data) {
+        if (!data.strategies || !data.symbols || !data.matrix) return;
+        
+        const totalStrategies = data.strategies.length;
+        const totalSymbols = data.symbols.length;
+        
+        let activeCount = 0;
+        let subscriptionCount = 0;
+        
+        data.strategies.forEach(strategy => {
+            data.symbols.forEach(symbol => {
+                if (data.matrix[strategy] && data.matrix[strategy][symbol]) {
+                    subscriptionCount++;
+                }
+            });
+            
+            // 检查策略是否有任何活跃的品种
+            const hasActiveSymbol = data.symbols.some(symbol => 
+                data.matrix[strategy] && data.matrix[strategy][symbol]
+            );
+            
+            if (hasActiveSymbol) {
+                activeCount++;
+            }
+        });
+        
+        document.getElementById('total-strategies').textContent = totalStrategies;
+        document.getElementById('active-strategies-count').textContent = activeCount;
+        document.getElementById('total-symbols').textContent = totalSymbols;
+        document.getElementById('active-subscriptions').textContent = subscriptionCount;
+    }
+    
+    // 切换策略状态
+    function toggleStrategy(strategy, symbol) {
+        const currentState = strategyMatrix.matrix[strategy] && strategyMatrix.matrix[strategy][symbol];
+        const newState = !currentState;
+        
+        fetch('/api/strategy/update', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                strategy: strategy,
+                symbol: symbol,
+                enabled: newState
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showNotification(
+                    `策略 ${strategy} (${symbol}) 已${newState ? '启用' : '停用'}`, 
+                    'success'
+                );
+                // 不需要手动刷新，WebSocket会自动更新
+            } else {
+                showNotification('更新失败: ' + data.error, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('更新策略状态错误:', error);
+            showNotification('网络错误，请重试', 'danger');
+        });
+    }
+    
+    // 启用所有策略
+    function enableAllStrategies() {
+        if (!confirm('确定要启用所有策略吗？')) return;
+        
+        const promises = [];
+        strategyMatrix.strategies.forEach(strategy => {
+            strategyMatrix.symbols.forEach(symbol => {
+                promises.push(
+                    fetch('/api/strategy/update', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            strategy: strategy,
+                            symbol: symbol,
+                            enabled: true
+                        })
+                    })
+                );
+            });
+        });
+        
+        Promise.all(promises)
+            .then(() => {
+                showNotification('所有策略已启用', 'success');
+                addStrategyLog('批量启用所有策略');
+            })
+            .catch(error => {
+                console.error('批量启用失败:', error);
+                showNotification('批量启用失败', 'danger');
+            });
+    }
+    
+    // 停用所有策略
+    function disableAllStrategies() {
+        if (!confirm('确定要停用所有策略吗？')) return;
+        
+        const promises = [];
+        strategyMatrix.strategies.forEach(strategy => {
+            strategyMatrix.symbols.forEach(symbol => {
+                promises.push(
+                    fetch('/api/strategy/update', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            strategy: strategy,
+                            symbol: symbol,
+                            enabled: false
+                        })
+                    })
+                );
+            });
+        });
+        
+        Promise.all(promises)
+            .then(() => {
+                showNotification('所有策略已停用', 'success');
+                addStrategyLog('批量停用所有策略');
+            })
+            .catch(error => {
+                console.error('批量停用失败:', error);
+                showNotification('批量停用失败', 'danger');
+            });
+    }
+    
+    // 配置策略
+    function configureStrategy(strategy) {
+        document.getElementById('config-strategy-name').value = strategy;
+        document.getElementById('config-symbol').value = '所有品种';
+        
+        const modal = new bootstrap.Modal(document.getElementById('strategyConfigModal'));
+        modal.show();
+    }
+    
+    // 保存策略配置
+    function saveStrategyConfig() {
+        const strategy = document.getElementById('config-strategy-name').value;
+        const riskLimit = document.getElementById('config-risk-limit').value;
+        const maxPosition = document.getElementById('config-max-position').value;
+        const parameters = document.getElementById('config-parameters').value;
+        
+        try {
+            JSON.parse(parameters); // 验证JSON格式
+            
+            // 这里应该调用API保存配置
+            showNotification(`策略 ${strategy} 配置已保存`, 'success');
+            addStrategyLog(`更新策略 ${strategy} 配置`);
+            
+            const modal = bootstrap.Modal.getInstance(document.getElementById('strategyConfigModal'));
+            modal.hide();
+            
+        } catch (error) {
+            showNotification('策略参数JSON格式错误', 'danger');
+        }
+    }
+    
+    // 添加策略日志
+    function addStrategyLog(message) {
+        const timestamp = new Date().toLocaleString('zh-CN');
+        strategyLogs.unshift({
+            timestamp: timestamp,
+            message: message
+        });
+        
+        // 保持最近50条日志
+        if (strategyLogs.length > 50) {
+            strategyLogs = strategyLogs.slice(0, 50);
+        }
+        
+        updateStrategyLogsDisplay();
+    }
+    
+    // 更新策略日志显示
+    function updateStrategyLogsDisplay() {
+        const container = document.getElementById('strategy-logs');
+        
+        if (strategyLogs.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted">暂无操作记录</div>';
+            return;
+        }
+        
+        let html = '';
+        strategyLogs.forEach(log => {
+            html += `
+                <div class="border-bottom pb-2 mb-2">
+                    <small class="text-muted">${log.timestamp}</small>
+                    <div>${log.message}</div>
+                </div>
+            `;
+        });
+        
+        container.innerHTML = html;
+    }
+    
+    // 刷新策略矩阵
+    function refreshStrategyMatrix() {
+        loadStrategyMatrix();
+        showNotification('策略矩阵已刷新', 'success');
+    }
+    
+    // 刷新页面数据
+    window.refreshPageData = function() {
+        loadStrategyMatrix();
+        showNotification('数据已刷新', 'success');
+    };
+
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        initWebSocket();
+        initStrategyChart();
+        loadStrategyMatrix();
+
+        // 每30秒自动刷新策略矩阵
+        setInterval(loadStrategyMatrix, 30000);
+
+        // 添加初始日志
+        addStrategyLog('策略控制面板已加载');
+    });
+</script>
+{% endblock %}

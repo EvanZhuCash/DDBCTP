@@ -1,0 +1,675 @@
+{% extends "base.html" %}
+
+{% block title %}日志警报 - DolphinDB CTP 监控系统{% endblock %}
+
+{% block page_title %}日志警报系统{% endblock %}
+
+{% block content %}
+<!-- 警报统计 -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-center border-info">
+            <div class="card-body">
+                <h5 class="card-title text-info">总日志数</h5>
+                <h2 class="text-info" id="total-logs">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center border-danger">
+            <div class="card-body">
+                <h5 class="card-title text-danger">错误日志</h5>
+                <h2 class="text-danger" id="error-logs">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center border-warning">
+            <div class="card-body">
+                <h5 class="card-title text-warning">警告日志</h5>
+                <h2 class="text-warning" id="warning-logs">0</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center border-success">
+            <div class="card-body">
+                <h5 class="card-title text-success">信息日志</h5>
+                <h2 class="text-success" id="info-logs">0</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 日志过滤和搜索 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-filter me-2"></i>
+                    日志过滤
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3">
+                        <label class="form-label">日志级别</label>
+                        <select class="form-select" id="log-level-filter">
+                            <option value="">全部级别</option>
+                            <option value="INFO">信息</option>
+                            <option value="WARNING">警告</option>
+                            <option value="ERROR">错误</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">组件</label>
+                        <select class="form-select" id="component-filter">
+                            <option value="">全部组件</option>
+                            <option value="Strategy">策略</option>
+                            <option value="DolphinDB">DolphinDB</option>
+                            <option value="System">系统</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">搜索关键词</label>
+                        <input type="text" class="form-control" id="search-keyword" placeholder="输入搜索关键词...">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">&nbsp;</label>
+                        <div class="d-grid">
+                            <button class="btn btn-primary" onclick="applyLogFilter()">
+                                <i class="fas fa-search"></i> 搜索
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 实时日志流 -->
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-stream me-2"></i>
+                    实时日志流
+                </h5>
+                <div>
+                    <div class="form-check form-switch d-inline-block me-3">
+                        <input class="form-check-input" type="checkbox" id="auto-scroll" checked>
+                        <label class="form-check-label" for="auto-scroll">自动滚动</label>
+                    </div>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="clearLogs()">
+                        <i class="fas fa-trash"></i> 清空
+                    </button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="exportLogs()">
+                        <i class="fas fa-download"></i> 导出
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="log-stream" style="height: 500px; overflow-y: auto; background-color: #1e1e1e; color: #ffffff; font-family: 'Courier New', monospace; font-size: 14px;">
+                    <div class="p-3 text-center text-muted">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        连接日志流...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    活跃警报
+                </h5>
+            </div>
+            <div class="card-body" style="max-height: 500px; overflow-y: auto;">
+                <div id="active-alerts">
+                    <div class="text-center text-muted">
+                        <i class="fas fa-check-circle text-success"></i>
+                        <div class="mt-2">暂无活跃警报</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 日志统计图表 -->
+<div class="row mb-4">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-bar me-2"></i>
+                    日志级别分布
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 250px;">
+                    <canvas id="log-level-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-line me-2"></i>
+                    日志趋势
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 250px;">
+                    <canvas id="log-trend-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 警报规则配置 -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-cog me-2"></i>
+                    警报规则配置
+                </h5>
+                <button class="btn btn-sm btn-primary" onclick="addAlertRule()">
+                    <i class="fas fa-plus"></i> 添加规则
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>规则名称</th>
+                                <th>条件</th>
+                                <th>级别</th>
+                                <th>通知方式</th>
+                                <th>状态</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody id="alert-rules-tbody">
+                            <tr>
+                                <td>高频错误检测</td>
+                                <td>5分钟内ERROR日志 > 10条</td>
+                                <td><span class="badge bg-danger">严重</span></td>
+                                <td>邮件 + 短信</td>
+                                <td><span class="badge bg-success">启用</span></td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="editAlertRule(1)">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAlertRule(1)">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>连接异常监控</td>
+                                <td>包含"连接失败"关键词</td>
+                                <td><span class="badge bg-warning">警告</span></td>
+                                <td>邮件</td>
+                                <td><span class="badge bg-success">启用</span></td>
+                                <td>
+                                    <button class="btn btn-sm btn-outline-primary" onclick="editAlertRule(2)">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAlertRule(2)">
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 警报规则编辑模态框 -->
+<div class="modal fade" id="alertRuleModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">警报规则配置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="alert-rule-form">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">规则名称</label>
+                                <input type="text" class="form-control" id="rule-name" required>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
+                                <label class="form-label">警报级别</label>
+                                <select class="form-select" id="rule-severity" required>
+                                    <option value="INFO">信息</option>
+                                    <option value="WARNING">警告</option>
+                                    <option value="ERROR">错误</option>
+                                    <option value="CRITICAL">严重</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">触发条件</label>
+                        <textarea class="form-control" id="rule-condition" rows="3" 
+                                  placeholder="例如：5分钟内ERROR日志数量 > 10"></textarea>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label class="form-label">通知方式</label>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="notify-email" checked>
+                            <label class="form-check-label" for="notify-email">邮件通知</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="notify-sms">
+                            <label class="form-check-label" for="notify-sms">短信通知</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="notify-webhook">
+                            <label class="form-check-label" for="notify-webhook">Webhook通知</label>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="rule-enabled" checked>
+                            <label class="form-check-label" for="rule-enabled">启用此规则</label>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveAlertRule()">保存规则</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let logLevelChart;
+    let logTrendChart;
+    let logs = [];
+    let filteredLogs = [];
+    let logStats = { INFO: 0, WARNING: 0, ERROR: 0 };
+    
+    // 初始化图表
+    function initCharts() {
+        // 日志级别分布图
+        const levelCtx = document.getElementById('log-level-chart').getContext('2d');
+        logLevelChart = new Chart(levelCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['信息', '警告', '错误'],
+                datasets: [{
+                    data: [0, 0, 0],
+                    backgroundColor: [
+                        'rgba(40, 167, 69, 0.8)',
+                        'rgba(255, 193, 7, 0.8)',
+                        'rgba(220, 53, 69, 0.8)'
+                    ],
+                    borderColor: [
+                        'rgba(40, 167, 69, 1)',
+                        'rgba(255, 193, 7, 1)',
+                        'rgba(220, 53, 69, 1)'
+                    ],
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'bottom'
+                    }
+                }
+            }
+        });
+        
+        // 日志趋势图
+        const trendCtx = document.getElementById('log-trend-chart').getContext('2d');
+        logTrendChart = new Chart(trendCtx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: '错误',
+                        data: [],
+                        borderColor: 'rgba(220, 53, 69, 1)',
+                        backgroundColor: 'rgba(220, 53, 69, 0.1)',
+                        tension: 0.4
+                    },
+                    {
+                        label: '警告',
+                        data: [],
+                        borderColor: 'rgba(255, 193, 7, 1)',
+                        backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                        tension: 0.4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top'
+                    }
+                }
+            }
+        });
+    }
+    
+    // 加载日志数据
+    function loadLogs() {
+        fetch('/api/logs')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    logs = data.data;
+                    filteredLogs = logs;
+                    updateLogDisplay();
+                    updateLogStats();
+                    updateCharts();
+                } else {
+                    console.error('加载日志失败:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('加载日志错误:', error);
+            });
+    }
+    
+    // 更新日志显示
+    function updateLogDisplay() {
+        const logStream = document.getElementById('log-stream');
+        
+        if (filteredLogs.length === 0) {
+            logStream.innerHTML = '<div class="p-3 text-center text-muted">暂无日志数据</div>';
+            return;
+        }
+        
+        let html = '';
+        filteredLogs.forEach(log => {
+            const levelColor = getLogLevelColor(log.level);
+            const timestamp = new Date(log.timestamp).toLocaleString('zh-CN');
+            
+            html += `
+                <div class="log-entry p-2 border-bottom" style="border-left: 4px solid ${levelColor};">
+                    <div class="d-flex justify-content-between">
+                        <span class="text-muted small">${timestamp}</span>
+                        <span class="badge" style="background-color: ${levelColor};">${log.level}</span>
+                    </div>
+                    <div class="mt-1">
+                        <strong>[${log.component}]</strong> ${log.message}
+                    </div>
+                </div>
+            `;
+        });
+        
+        logStream.innerHTML = html;
+        
+        // 自动滚动到底部
+        if (document.getElementById('auto-scroll').checked) {
+            logStream.scrollTop = logStream.scrollHeight;
+        }
+    }
+    
+    // 获取日志级别颜色
+    function getLogLevelColor(level) {
+        switch (level) {
+            case 'INFO': return '#28a745';
+            case 'WARNING': return '#ffc107';
+            case 'ERROR': return '#dc3545';
+            default: return '#6c757d';
+        }
+    }
+    
+    // 更新日志统计
+    function updateLogStats() {
+        logStats = { INFO: 0, WARNING: 0, ERROR: 0 };
+        
+        filteredLogs.forEach(log => {
+            if (logStats.hasOwnProperty(log.level)) {
+                logStats[log.level]++;
+            }
+        });
+        
+        document.getElementById('total-logs').textContent = filteredLogs.length;
+        document.getElementById('info-logs').textContent = logStats.INFO;
+        document.getElementById('warning-logs').textContent = logStats.WARNING;
+        document.getElementById('error-logs').textContent = logStats.ERROR;
+    }
+    
+    // 更新图表
+    function updateCharts() {
+        // 更新级别分布图
+        logLevelChart.data.datasets[0].data = [
+            logStats.INFO,
+            logStats.WARNING,
+            logStats.ERROR
+        ];
+        logLevelChart.update();
+        
+        // 更新趋势图（简化版，实际应该按时间聚合）
+        const now = new Date();
+        const timeLabel = now.toLocaleTimeString();
+        
+        if (logTrendChart.data.labels.length >= 20) {
+            logTrendChart.data.labels.shift();
+            logTrendChart.data.datasets[0].data.shift();
+            logTrendChart.data.datasets[1].data.shift();
+        }
+        
+        logTrendChart.data.labels.push(timeLabel);
+        logTrendChart.data.datasets[0].data.push(logStats.ERROR);
+        logTrendChart.data.datasets[1].data.push(logStats.WARNING);
+        logTrendChart.update();
+    }
+    
+    // 应用日志过滤
+    function applyLogFilter() {
+        const levelFilter = document.getElementById('log-level-filter').value;
+        const componentFilter = document.getElementById('component-filter').value;
+        const searchKeyword = document.getElementById('search-keyword').value.toLowerCase();
+        
+        filteredLogs = logs.filter(log => {
+            // 级别过滤
+            if (levelFilter && log.level !== levelFilter) {
+                return false;
+            }
+            
+            // 组件过滤
+            if (componentFilter && log.component !== componentFilter) {
+                return false;
+            }
+            
+            // 关键词搜索
+            if (searchKeyword && !log.message.toLowerCase().includes(searchKeyword)) {
+                return false;
+            }
+            
+            return true;
+        });
+        
+        updateLogDisplay();
+        updateLogStats();
+        updateCharts();
+        
+        showNotification(`找到 ${filteredLogs.length} 条匹配的日志`, 'info');
+    }
+    
+    // 清空日志
+    function clearLogs() {
+        if (confirm('确定要清空当前显示的日志吗？')) {
+            document.getElementById('log-stream').innerHTML = 
+                '<div class="p-3 text-center text-muted">日志已清空</div>';
+            showNotification('日志已清空', 'success');
+        }
+    }
+    
+    // 导出日志
+    function exportLogs() {
+        const dataStr = JSON.stringify(filteredLogs, null, 2);
+        const dataBlob = new Blob([dataStr], {type: 'application/json'});
+        
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(dataBlob);
+        link.download = `logs_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+        link.click();
+        
+        showNotification('日志已导出', 'success');
+    }
+    
+    // 添加警报规则
+    function addAlertRule() {
+        // 清空表单
+        document.getElementById('alert-rule-form').reset();
+        document.getElementById('rule-enabled').checked = true;
+        
+        const modal = new bootstrap.Modal(document.getElementById('alertRuleModal'));
+        modal.show();
+    }
+    
+    // 编辑警报规则
+    function editAlertRule(ruleId) {
+        // 这里应该加载规则数据
+        document.getElementById('rule-name').value = '高频错误检测';
+        document.getElementById('rule-severity').value = 'ERROR';
+        document.getElementById('rule-condition').value = '5分钟内ERROR日志 > 10条';
+        document.getElementById('notify-email').checked = true;
+        document.getElementById('rule-enabled').checked = true;
+        
+        const modal = new bootstrap.Modal(document.getElementById('alertRuleModal'));
+        modal.show();
+    }
+    
+    // 删除警报规则
+    function deleteAlertRule(ruleId) {
+        if (confirm('确定要删除这个警报规则吗？')) {
+            showNotification('警报规则已删除', 'success');
+            // 这里应该调用API删除规则
+        }
+    }
+    
+    // 保存警报规则
+    function saveAlertRule() {
+        const ruleName = document.getElementById('rule-name').value;
+        const severity = document.getElementById('rule-severity').value;
+        const condition = document.getElementById('rule-condition').value;
+        const notifyEmail = document.getElementById('notify-email').checked;
+        const notifySms = document.getElementById('notify-sms').checked;
+        const notifyWebhook = document.getElementById('notify-webhook').checked;
+        const enabled = document.getElementById('rule-enabled').checked;
+        
+        if (!ruleName || !condition) {
+            showNotification('请填写规则名称和触发条件', 'warning');
+            return;
+        }
+        
+        // 这里应该调用API保存规则
+        console.log('保存警报规则:', {
+            ruleName, severity, condition, 
+            notifications: { email: notifyEmail, sms: notifySms, webhook: notifyWebhook },
+            enabled
+        });
+        
+        showNotification('警报规则已保存', 'success');
+        
+        const modal = bootstrap.Modal.getInstance(document.getElementById('alertRuleModal'));
+        modal.hide();
+    }
+    
+    // 模拟实时日志流
+    function simulateLogStream() {
+        const components = ['Strategy', 'DolphinDB', 'System'];
+        const levels = ['INFO', 'WARNING', 'ERROR'];
+        const messages = [
+            '策略执行完成',
+            '数据库连接正常',
+            '内存使用率较高',
+            '网络连接超时',
+            '订单提交成功',
+            '计算引擎启动',
+            '风控检查通过'
+        ];
+        
+        setInterval(() => {
+            const newLog = {
+                timestamp: new Date().toISOString(),
+                level: levels[Math.floor(Math.random() * levels.length)],
+                component: components[Math.floor(Math.random() * components.length)],
+                message: messages[Math.floor(Math.random() * messages.length)]
+            };
+            
+            logs.unshift(newLog);
+            
+            // 保持最近1000条日志
+            if (logs.length > 1000) {
+                logs = logs.slice(0, 1000);
+            }
+            
+            // 如果没有过滤条件，更新显示
+            if (filteredLogs === logs) {
+                filteredLogs = logs;
+                updateLogDisplay();
+                updateLogStats();
+                updateCharts();
+            }
+        }, 3000); // 每3秒添加一条新日志
+    }
+    
+    // 刷新页面数据
+    window.refreshPageData = function() {
+        loadLogs();
+        showNotification('日志数据已刷新', 'success');
+    };
+    
+    // 页面加载完成后初始化
+    document.addEventListener('DOMContentLoaded', function() {
+        initCharts();
+        loadLogs();
+        simulateLogStream();
+        
+        // 绑定搜索框回车事件
+        document.getElementById('search-keyword').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                applyLogFilter();
+            }
+        });
+    });
+</script>
+{% endblock %}

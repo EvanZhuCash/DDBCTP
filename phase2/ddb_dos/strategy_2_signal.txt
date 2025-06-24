@@ -1,0 +1,77 @@
+share streamTable(100:0, `symbol`timestamp`close`mid`upper`lower, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as bollST
+
+share streamTable(100:0, `symbol`timestamp`close`signal, [SYMBOL, TIMESTAMP, DOUBLE, STRING]) as signalST
+
+posDict = dict(SYMBOL, STRING)
+twapConfig = dict(STRING, ANY)
+
+
+def signal_calc(mutable posDict, mutable twapConfig, symbol, close, mid, upper, lower, pre_close, pre_upper, pre_lower){
+    // print(symbol[0], close[0])
+    if (!(symbol[0] in posDict.keys())){
+        posDict[symbol[0]] = "FLAT"
+    }
+    pos = posDict[symbol[0]]
+    sig = "NO_TRADE"
+    if (pos == "FLAT"){
+        if ((close[0] < lower[0]) && (pre_close[0] > pre_lower[0])){
+            sig = "OPEN_LONG"
+            posDict[symbol[0]] = "LONG"
+        } else if ((close[0] > upper[0]) && (pre_close[0] < pre_upper[0])){
+            sig = "OPEN_SHORT"
+            posDict[symbol[0]] = "SHORT"
+        }
+    } else if (pos == "LONG"){
+        if (close[0] > mid[0]) {
+            sig = "CLOSE_LONG"
+            posDict[symbol[0]] = "FLAT"
+        }
+    } else if (pos == "SHORT"){
+        if (close[0] < mid[0]) {
+            sig = "CLOSE_SHORT"
+            posDict[symbol[0]] = "FLAT"
+        }
+    }
+    if (sig != "NO_TRADE"){
+        twapConfig["symbol"] = symbol[0]
+        twapConfig["totalVolume"] = 100
+        twapConfig["startTime"] = now()
+        twapConfig["numSlice"] = 10
+        twapConfig["intervalSec"] = 2
+        twapConfig["volumePerSlice"] = twapConfig["totalVolume"] / twapConfig["numSlice"]
+        twapConfig["direction"] = sig
+    }
+    return sig
+}
+
+
+createReactiveStateEngine(name="reactiveDemo", metrics =<[timestamp, close, signal_calc(posDict, twapConfig, symbol, close, mid, upper, lower, prev(close), prev(upper), prev(lower))]>, dummyTable=bollST, outputTable=signalST, keyColumn="symbol")
+
+
+subscribeTable(tableName="bollST", actionName="reactiveDemo", handler=getStreamEngine(`reactiveDemo), msgAsTable=true, offset=-1)
+
+def simulate(){
+    for(i in 0..100){
+        close = 100.0 + rand(-2..2, 1)
+        mid = 100.0
+        upper = 101.5
+        lower = 98.5
+        sym = rand(`AAPL`TESL)
+        insert into bollST values(sym, now(), close, mid, upper, lower)
+        sleep(200)
+    }
+}
+
+simulate()
+
+dropStreamEngine(`reactiveDemo)
+unsubscribeTable(tableName=`bollST, actionName=`reactiveDemo)
+dropStreamTable(`bollST)
+dropStreamTable(`signalST)
+DROP TABLE `test
+undef(`posDict)
+if (!(`c in posDict.keys())){
+    print(1)
+}
+posDict["a"] = "a"
+posDict["b"] = "b"

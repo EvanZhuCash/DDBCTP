@@ -1,0 +1,22 @@
+# DolphinDB CTP 性能测试模块依赖
+
+# 核心依赖
+dolphindb>=1.30.22.5
+pandas>=1.3.0
+numpy>=1.21.0
+
+# 系统监控
+psutil>=5.8.0
+
+# 网络请求
+requests>=2.25.0
+
+# 数据处理
+python-dateutil>=2.8.0
+
+# 可选依赖（用于邮件通知）
+# smtplib 是标准库，无需安装
+
+# 开发和测试
+pytest>=6.0.0
+pytest-cov>=2.12.0

@@ -1,0 +1,172 @@
+{
+  "test_description": "DolphinDB CTP 性能测试配置示例",
+  "test_version": "1.0",
+  
+  "run_latency_test": true,
+  "run_recording_test": true,
+  "run_stress_test": true,
+  
+  "latency_config": {
+    "description": "延迟测试配置",
+    "symbol_counts": [1, 10, 50, 100],
+    "strategy_counts": [1, 3, 5],
+    "duration": 60,
+    "tick_rate": 100,
+    "test_scenarios": [
+      {
+        "name": "single_symbol_low_freq",
+        "symbols": 1,
+        "strategies": 1,
+        "tick_rate": 10,
+        "duration": 300,
+        "expected_p99_latency_us": 1000
+      },
+      {
+        "name": "multi_symbol_medium_freq",
+        "symbols": 50,
+        "strategies": 3,
+        "tick_rate": 100,
+        "duration": 300,
+        "expected_p99_latency_us": 5000
+      },
+      {
+        "name": "high_freq_stress",
+        "symbols": 100,
+        "strategies": 5,
+        "tick_rate": 1000,
+        "duration": 300,
+        "expected_p99_latency_us": 10000
+      }
+    ]
+  },
+  
+  "recording_config": {
+    "description": "行情录制测试配置",
+    "symbol_count": 200,
+    "duration_minutes": 15,
+    "tick_rate": 50,
+    "enable_compression": true,
+    "batch_size": 10000,
+    "memory_threshold_percent": 80,
+    "test_scenarios": [
+      {
+        "name": "small_scale_recording",
+        "symbol_count": 50,
+        "duration_minutes": 5,
+        "tick_rate": 20
+      },
+      {
+        "name": "medium_scale_recording", 
+        "symbol_count": 100,
+        "duration_minutes": 10,
+        "tick_rate": 50
+      },
+      {
+        "name": "large_scale_recording",
+        "symbol_count": 500,
+        "duration_minutes": 30,
+        "tick_rate": 100
+      }
+    ]
+  },
+  
+  "stress_config": {
+    "description": "压力测试配置",
+    "max_symbols": 500,
+    "max_strategies": 20,
+    "test_duration": 600,
+    "memory_limit_percent": 85,
+    "cpu_limit_percent": 90,
+    "incremental_steps": {
+      "symbol_steps": [10, 25, 50, 100, 200, 500],
+      "strategy_steps": [1, 3, 5, 10, 15, 20]
+    },
+    "performance_thresholds": {
+      "max_acceptable_latency_us": 10000,
+      "min_acceptable_throughput_tps": 100,
+      "max_memory_usage_percent": 85
+    }
+  },
+  
+  "monitoring_config": {
+    "description": "监控配置",
+    "health_check_interval": 10,
+    "alert_thresholds": {
+      "memory_warning_percent": 80,
+      "memory_critical_percent": 90,
+      "cpu_warning_percent": 70,
+      "cpu_critical_percent": 90,
+      "disk_warning_percent": 80,
+      "disk_critical_percent": 90,
+      "latency_warning_us": 5000,
+      "latency_critical_us": 10000
+    },
+    "notification_channels": [
+      {
+        "type": "console",
+        "enabled": true
+      },
+      {
+        "type": "email",
+        "enabled": false,
+        "config": {
+          "smtp_server": "smtp.gmail.com",
+          "smtp_port": 587,
+          "use_tls": true,
+          "username": "your_email@gmail.com",
+          "password": "your_app_password",
+          "from_email": "your_email@gmail.com",
+          "to_email": "admin@company.com"
+        }
+      },
+      {
+        "type": "webhook",
+        "enabled": false,
+        "config": {
+          "url": "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "timeout": 10
+        }
+      }
+    ]
+  },
+  
+  "output_config": {
+    "description": "输出配置",
+    "output_directory": "performance_testing/results",
+    "generate_charts": false,
+    "save_raw_data": true,
+    "compress_results": false,
+    "report_formats": ["json", "csv"],
+    "cleanup_after_test": false
+  },
+  
+  "dolphindb_config": {
+    "description": "DolphinDB连接配置",
+    "host": "localhost",
+    "port": 8848,
+    "username": "admin",
+    "password": "123456",
+    "timeout": 30,
+    "retry_attempts": 3,
+    "retry_interval": 5
+  },
+  
+  "test_data_config": {
+    "description": "测试数据配置",
+    "price_range": {
+      "min": 50.0,
+      "max": 150.0
+    },
+    "volume_range": {
+      "min": 100,
+      "max": 1000
+    },
+    "symbol_prefix": "TEST",
+    "simulate_market_hours": true,
+    "add_noise": true,
+    "noise_level": 0.1
+  }
+}

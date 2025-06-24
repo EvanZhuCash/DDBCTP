@@ -1,0 +1,40 @@
+login("admin", `123456)
+
+tt = loadText("./IC2311_tick.csv")
+
+share streamTable(1000:0, `symbol`timestamp`price`volume, [SYMBOL, TIMESTAMP, DOUBLE, INT]) as tickStream
+share streamTable(10000:0, `timestamp`symbol`price, [TIMESTAMP, SYMBOL, DOUBLE]) as agg1min
+share streamTable(10000:0, `symbol`timestamp`close`high`mean`low, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as factorStream
+// share streamTable(1:0, `symbol`)
+
+engine1min = createTimeSeriesEngine(name="engine1min", windowSize=60000, step=60000, metrics=<[last(price)]>,dummyTable=tickStream, outputTable=agg1min, timeColumn="timestamp",useSystemTime=false,keyColumn="symbol",useWindowStartTime=false)
+
+use ta
+
+reactiveStateMetrics = <[
+    timestamp,
+    price,
+    ta::bBands(price, timePeriod=5, nbdevUp=2, nbdevDn=2, maType=0)[0] as `high,
+    ta::bBands(price, timePeriod=5, nbdevUp=2, nbdevDn=2, maType=0)[1] as `mean,
+    ta::bBands(price, timePeriod=5, nbdevUp=2, nbdevDn=2, maType=0)[2] as `low
+]>
+
+tareactive = createReactiveStateEngine(name="taReactiveStateEngine", metrics=reactiveStateMetrics, dummyTable=agg1min, outputTable=factorStream, keyColumn="symbol", keepOrder=true)
+
+subscribeTable(tableName=`tickStream, actionName="engine1min", handler=tableInsert{engine1min}, msgAsTable=true, offset=-1)
+subscribeTable(tableName=`agg1min, actionName="taReactiveStateEngine", handler=getStreamEngine("taReactiveStateEngine"), msgAsTable=true, reconnect=true)
+
+tickStream.append!(tt)
+
+unsubscribeTable(tableName=`tickStream, actionName=`engine1min)
+dropStreamEngine(`engine1min)
+unsubscribeTable(tableName=`agg1min, actionName=`taReactiveStateEngine)
+dropStreamEngine(`taReactiveStateEngine)
+dropStreamTable(`tickStream)
+dropStreamTable(`agg1min)
+dropStreamTable(`factorStream)
+
+DROP TABLE `tt
+DROP TABLE `engine1min
+DROP TABLE `tareactive
+undef(`reactiveStateMetrics)
