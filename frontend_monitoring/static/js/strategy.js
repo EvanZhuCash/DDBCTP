@@ -17,11 +17,15 @@ class StrategyController {
     init() {
         this.initWebSocket();
         this.initPerformanceChart();
+        this.initSpreadChart();
         this.loadStrategyMatrix();
         this.setupEventListeners();
-        
+
         // 定期刷新数据
         setInterval(() => this.refreshData(), 30000);
+
+        // 更频繁地刷新tick数据
+        setInterval(() => this.loadLiveTickData(), 1000);
     }
     
     initWebSocket() {
@@ -137,6 +141,93 @@ class StrategyController {
         };
         
         this.performanceChart = chartManager.createChart('strategy-performance-chart', config);
+    }
+
+    initSpreadChart() {
+        const config = {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: '价差',
+                    data: [],
+                    borderColor: CONFIG.CHART_COLORS.WARNING,
+                    backgroundColor: CONFIG.CHART_COLORS.WARNING + '20',
+                    tension: 0.4,
+                    fill: true,
+                    pointRadius: 2
+                }, {
+                    label: '价差百分比',
+                    data: [],
+                    borderColor: CONFIG.CHART_COLORS.ACCENT,
+                    backgroundColor: CONFIG.CHART_COLORS.ACCENT + '20',
+                    tension: 0.4,
+                    yAxisID: 'y1',
+                    pointRadius: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: '时间'
+                        }
+                    },
+                    y: {
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                            display: true,
+                            text: '价差'
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: '价差百分比 (%)'
+                        },
+                        grid: {
+                            drawOnChartArea: false,
+                        },
+                    }
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let label = context.dataset.label || '';
+                                if (label) {
+                                    label += ': ';
+                                }
+                                if (context.datasetIndex === 0) {
+                                    label += formatNumber(context.parsed.y, 2);
+                                } else {
+                                    label += formatNumber(context.parsed.y, 3) + '%';
+                                }
+                                return label;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        this.spreadChart = chartManager.createChart('spread-chart', config);
     }
     
     async loadStrategyMatrix() {
@@ -337,6 +428,188 @@ class StrategyController {
     refreshData() {
         this.loadStrategyMatrix();
         this.loadPerformanceData();
+        this.loadRecentSignals();
+        this.loadCurrentPositions();
+        this.loadLiveTickData();
+        this.loadSpreadStats();
+    }
+
+    async loadLiveTickData() {
+        try {
+            const response = await apiManager.get('/market/live_ticks');
+            if (response.success && response.data.length > 0) {
+                this.displayLiveTickData(response.data);
+            }
+        } catch (error) {
+            console.error('加载实时tick数据错误:', error);
+        }
+    }
+
+    async loadSpreadStats() {
+        try {
+            const response = await apiManager.get('/market/spread_stats');
+            if (response.success && response.data.length > 0) {
+                this.updateSpreadChart(response.data);
+            }
+        } catch (error) {
+            console.error('加载价差统计错误:', error);
+        }
+    }
+
+    displayLiveTickData(ticks) {
+        if (ticks.length === 0) return;
+
+        // 更新最新价格显示
+        const latestTick = ticks[0];
+        document.getElementById('last-price').textContent = formatNumber(latestTick.last_price, 2);
+        document.getElementById('bid-price').textContent = formatNumber(latestTick.bid_price, 2);
+        document.getElementById('ask-price').textContent = formatNumber(latestTick.ask_price, 2);
+        document.getElementById('bid-volume').textContent = latestTick.bid_volume;
+        document.getElementById('ask-volume').textContent = latestTick.ask_volume;
+        document.getElementById('spread-value').textContent = formatNumber(latestTick.spread, 2);
+
+        const spreadPct = (latestTick.spread / latestTick.last_price * 100).toFixed(3);
+        document.getElementById('spread-pct').textContent = spreadPct + '%';
+
+        // 更新tick流显示
+        this.updateTickStream(ticks);
+    }
+
+    updateTickStream(ticks) {
+        const container = document.getElementById('tick-stream');
+        if (!container) return;
+
+        let html = '';
+        ticks.slice(0, 15).forEach(tick => {
+            const timeStr = new Date(tick.timestamp).toLocaleTimeString();
+            const spreadPct = (tick.spread / tick.last_price * 100).toFixed(3);
+
+            html += `
+                <div class="tick-line mb-1">
+                    <span class="text-muted">${timeStr}</span>
+                    <strong class="text-primary">${formatNumber(tick.last_price, 2)}</strong>
+                    <span class="text-success">${formatNumber(tick.bid_price, 2)}(${tick.bid_volume})</span>
+                    <span class="text-danger">${formatNumber(tick.ask_price, 2)}(${tick.ask_volume})</span>
+                    <span class="text-warning">±${formatNumber(tick.spread, 2)}(${spreadPct}%)</span>
+                    <span class="text-info">Vol:${tick.volume}</span>
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
+
+        // 自动滚动到顶部显示最新数据
+        container.scrollTop = 0;
+    }
+
+    updateSpreadChart(spreadData) {
+        if (!this.spreadChart || spreadData.length === 0) return;
+
+        const labels = spreadData.map(item => formatTime(item.timestamp));
+        const spreads = spreadData.map(item => item.spread);
+        const spreadPcts = spreadData.map(item => item.spread_pct);
+
+        this.spreadChart.data.labels = labels.slice(-20); // 只显示最近20个点
+        this.spreadChart.data.datasets[0].data = spreads.slice(-20);
+        this.spreadChart.data.datasets[1].data = spreadPcts.slice(-20);
+        this.spreadChart.update('none');
+    }
+
+    async loadRecentSignals() {
+        try {
+            const response = await apiManager.get('/strategy/signals');
+            if (response.success && response.data.length > 0) {
+                this.displayRecentSignals(response.data);
+            }
+        } catch (error) {
+            console.error('加载信号数据错误:', error);
+        }
+    }
+
+    async loadCurrentPositions() {
+        try {
+            const response = await apiManager.get('/strategy/positions');
+            if (response.success) {
+                this.displayCurrentPositions(response.data);
+            }
+        } catch (error) {
+            console.error('加载持仓数据错误:', error);
+        }
+    }
+
+    displayRecentSignals(signals) {
+        const container = document.getElementById('recent-signals-container');
+        if (!container) return;
+
+        if (signals.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center py-3">暂无信号数据</div>';
+            return;
+        }
+
+        let html = '<div class="list-group list-group-flush">';
+        signals.slice(0, 10).forEach(signal => {
+            const signalClass = this.getSignalClass(signal.signal);
+            const timeStr = getRelativeTime(signal.timestamp);
+
+            html += `
+                <div class="list-group-item d-flex justify-content-between align-items-center">
+                    <div>
+                        <span class="badge bg-${signalClass} me-2">${signal.signal}</span>
+                        <strong>${signal.symbol}</strong>
+                        <small class="text-muted ms-2">@ ${formatNumber(signal.price)}</small>
+                    </div>
+                    <small class="text-muted">${timeStr}</small>
+                </div>
+            `;
+        });
+        html += '</div>';
+
+        container.innerHTML = html;
+    }
+
+    displayCurrentPositions(positions) {
+        const container = document.getElementById('current-positions-container');
+        if (!container) return;
+
+        if (positions.length === 0) {
+            container.innerHTML = '<div class="text-muted text-center py-3">暂无持仓</div>';
+            return;
+        }
+
+        let html = '<div class="table-responsive"><table class="table table-sm">';
+        html += '<thead><tr><th>品种</th><th>方向</th><th>数量</th><th>价格</th></tr></thead><tbody>';
+
+        positions.forEach(position => {
+            const directionClass = position.direction === 'LONG' ? 'text-success' : 'text-danger';
+            const directionIcon = position.direction === 'LONG' ? 'fa-arrow-up' : 'fa-arrow-down';
+
+            html += `
+                <tr>
+                    <td><strong>${position.symbol}</strong></td>
+                    <td><i class="fas ${directionIcon} ${directionClass}"></i> ${position.direction}</td>
+                    <td>${position.qty}</td>
+                    <td>${formatNumber(position.price)}</td>
+                </tr>
+            `;
+        });
+
+        html += '</tbody></table></div>';
+        container.innerHTML = html;
+    }
+
+    getSignalClass(signal) {
+        switch (signal) {
+            case 'OPEN_LONG':
+            case 'CLOSE_SHORT':
+                return 'success';
+            case 'OPEN_SHORT':
+            case 'CLOSE_LONG':
+                return 'danger';
+            case 'NO_TRADE':
+                return 'secondary';
+            default:
+                return 'info';
+        }
     }
     
     async loadPerformanceData() {

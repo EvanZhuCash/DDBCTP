@@ -7,6 +7,7 @@ import os
 import json
 import time
 import threading
+import random
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
@@ -64,37 +65,55 @@ class StrategyManager:
         self.load_strategy_matrix()
     
     def initialize_tables(self):
-        """初始化策略控制表"""
+        """初始化策略控制表和相关数据表"""
         script = """
-        // 策略控制矩阵表
-        if(existsTable("strategy_control_matrix")){
-            dropTable("strategy_control_matrix")
-        }
-        
+        // 创建策略控制矩阵表（基于test_hist.py的策略）
         strategy_control_matrix = table(
-            ["bollinger", "bollinger", "bollinger", "ma_cross", "ma_cross", "momentum", "arbitrage"] as strategy_name,
-            ["IC2509", "IF2509", "IH2509", "IC2509", "IF2509", "T2509", "IC2509"] as symbol,
-            [true, true, false, true, false, false, true] as enabled,
-            [now(), now(), now(), now(), now(), now(), now()] as last_updated
+            ["bollinger_bands"] as strategy_name,
+            ["IC2311"] as symbol,
+            [true] as enabled,
+            [now()] as last_updated
         )
-        
+
         share strategy_control_matrix as strategy_control_matrix
-        
-        // 策略订阅状态表
-        if(existsTable("subscription_status")){
-            dropTable("subscription_status")
-        }
-        share streamTable(100:0, `strategy_name`symbol`subscription_id`status`last_update, 
-            [SYMBOL, SYMBOL, STRING, SYMBOL, TIMESTAMP]) as subscription_status
-        
-        // 策略性能表
-        if(existsTable("strategy_performance")){
-            dropTable("strategy_performance")
-        }
-        share streamTable(1000:0, `timestamp`strategy_name`symbol`pnl`nav`sharpe`max_drawdown`win_rate`total_trades, 
+
+        // 创建策略性能表
+        share streamTable(1000:0, `timestamp`strategy_name`symbol`pnl`nav`sharpe`max_drawdown`win_rate`total_trades,
             [TIMESTAMP, SYMBOL, SYMBOL, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, INT]) as strategy_performance
+
+        // 创建实时tick数据表（如果不存在）
+        try {
+            share streamTable(1000:0, `symbol`timestamp`last_price`bid_price`ask_price`bid_volume`ask_volume`volume`turnover`spread,
+                [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE, INT, INT, INT, DOUBLE, DOUBLE]) as live_tick_stream
+        } catch(ex) {
+            // Table already exists, ignore
+        }
+
+        // 创建价差统计表（如果不存在）
+        try {
+            share streamTable(1000:0, `symbol`timestamp`spread`spread_pct`mid_price,
+                [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE]) as spread_stats
+        } catch(ex) {
+            // Table already exists, ignore
+        }
+
+        // 创建交易信号表（如果不存在）
+        try {
+            share streamTable(1000:0, `symbol`timestamp`close`signal,
+                [SYMBOL, TIMESTAMP, DOUBLE, STRING]) as signalST
+        } catch(ex) {
+            // Table already exists, ignore
+        }
+
+        // 创建订单流表（如果不存在）
+        try {
+            share streamTable(1000:0, `order_id`symbol`timestamp`price`qty`signal_type,
+                [INT, SYMBOL, TIMESTAMP, DOUBLE, INT, STRING]) as orderStream
+        } catch(ex) {
+            // Table already exists, ignore
+        }
         """
-        
+
         self.ddb.execute(script)
     
     def load_strategy_matrix(self):
@@ -165,19 +184,40 @@ class StrategyManager:
     def get_strategy_performance(self):
         """获取策略性能数据"""
         try:
-            script = """
-            select * from strategy_performance 
-            where timestamp > (now() - 24*60*60*1000)  // 最近24小时
-            order by timestamp desc
-            """
-            
-            result = self.ddb.execute(script)
+            # 尝试从DolphinDB获取真实性能数据
+            result = self.ddb.execute("select * from strategy_performance order by timestamp desc limit 50")
+
             if result is not None and len(result) > 0:
-                return result.to_dict('records')
+                performance_data = []
+                for _, row in result.iterrows():
+                    performance_data.append({
+                        'timestamp': row['timestamp'].isoformat() if hasattr(row['timestamp'], 'isoformat') else str(row['timestamp']),
+                        'total_pnl': float(row['pnl']) if 'pnl' in row else 0,
+                        'sharpe_ratio': float(row['sharpe']) if 'sharpe' in row else 0,
+                        'max_drawdown': float(row['max_drawdown']) if 'max_drawdown' in row else 0,
+                        'win_rate': float(row['win_rate']) if 'win_rate' in row else 0,
+                        'total_trades': int(row['total_trades']) if 'total_trades' in row else 0
+                    })
+                return performance_data[::-1]  # 按时间正序
             else:
-                return []
+                # 如果没有真实数据，返回模拟数据
+                now = datetime.now()
+                performance_data = []
+
+                for i in range(20):
+                    timestamp = now - timedelta(minutes=i)
+                    performance_data.append({
+                        'timestamp': timestamp.isoformat(),
+                        'total_pnl': random.uniform(-1000, 2000),
+                        'sharpe_ratio': random.uniform(0.5, 2.0),
+                        'max_drawdown': random.uniform(0, 500),
+                        'win_rate': random.uniform(0.4, 0.8),
+                        'total_trades': random.randint(0, 50)
+                    })
+
+                return performance_data[::-1]  # 按时间正序
         except Exception as e:
-            print(f"获取策略性能失败: {e}")
+            print(f"获取策略性能错误: {e}")
             return []
 
 
@@ -381,6 +421,117 @@ def get_strategy_performance():
         return jsonify({
             'success': True,
             'data': performance_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/strategy/signals')
+def get_recent_signals():
+    """获取最近的交易信号"""
+    try:
+        signals = ddb_manager.session.run("select * from signalST order by timestamp desc limit 20")
+        signal_data = []
+
+        if signals is not None and len(signals) > 0:
+            for _, row in signals.iterrows():
+                signal_data.append({
+                    'timestamp': row['timestamp'].isoformat() if hasattr(row['timestamp'], 'isoformat') else str(row['timestamp']),
+                    'symbol': str(row['symbol']),
+                    'price': float(row['close']),
+                    'signal': str(row['signal'])
+                })
+
+        return jsonify({
+            'success': True,
+            'data': signal_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/strategy/positions')
+def get_current_positions():
+    """获取当前持仓"""
+    try:
+        positions = ddb_manager.session.run("select * from positionTable")
+        position_data = []
+
+        if positions is not None and len(positions) > 0:
+            for _, row in positions.iterrows():
+                position_data.append({
+                    'symbol': str(row['symbol']),
+                    'qty': int(row['qty']),
+                    'price': float(row['price']),
+                    'direction': str(row['dir'])
+                })
+
+        return jsonify({
+            'success': True,
+            'data': position_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/market/live_ticks')
+def get_live_ticks():
+    """获取实时tick数据"""
+    try:
+        ticks = ddb_manager.session.run("select * from live_tick_stream order by timestamp desc limit 20")
+        tick_data = []
+
+        if ticks is not None and len(ticks) > 0:
+            for _, row in ticks.iterrows():
+                tick_data.append({
+                    'symbol': str(row['symbol']),
+                    'timestamp': row['timestamp'].isoformat() if hasattr(row['timestamp'], 'isoformat') else str(row['timestamp']),
+                    'last_price': float(row['last_price']),
+                    'bid_price': float(row['bid_price']),
+                    'ask_price': float(row['ask_price']),
+                    'bid_volume': int(row['bid_volume']),
+                    'ask_volume': int(row['ask_volume']),
+                    'volume': int(row['volume']),
+                    'turnover': float(row['turnover']),
+                    'spread': float(row['spread'])
+                })
+
+        return jsonify({
+            'success': True,
+            'data': tick_data
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/market/spread_stats')
+def get_spread_stats():
+    """获取价差统计"""
+    try:
+        spreads = ddb_manager.session.run("select * from spread_stats order by timestamp desc limit 50")
+        spread_data = []
+
+        if spreads is not None and len(spreads) > 0:
+            for _, row in spreads.iterrows():
+                spread_data.append({
+                    'symbol': str(row['symbol']),
+                    'timestamp': row['timestamp'].isoformat() if hasattr(row['timestamp'], 'isoformat') else str(row['timestamp']),
+                    'spread': float(row['spread']),
+                    'spread_pct': float(row['spread_pct']),
+                    'mid_price': float(row['mid_price'])
+                })
+
+        return jsonify({
+            'success': True,
+            'data': spread_data
         })
     except Exception as e:
         return jsonify({

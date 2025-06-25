@@ -15,11 +15,13 @@ const CONFIG = {
         SLOW: 60000    // 60秒
     },
     CHART_COLORS: {
-        PRIMARY: 'rgba(102, 126, 234, 1)',
-        SUCCESS: 'rgba(40, 167, 69, 1)',
-        WARNING: 'rgba(255, 193, 7, 1)',
-        DANGER: 'rgba(220, 53, 69, 1)',
-        INFO: 'rgba(23, 162, 184, 1)'
+        PRIMARY: 'rgba(44, 62, 80, 1)',
+        SUCCESS: 'rgba(39, 174, 96, 1)',
+        WARNING: 'rgba(243, 156, 18, 1)',
+        DANGER: 'rgba(231, 76, 60, 1)',
+        INFO: 'rgba(52, 152, 219, 1)',
+        ACCENT: 'rgba(230, 126, 34, 1)',
+        SECONDARY: 'rgba(149, 165, 166, 1)'
     }
 };
 

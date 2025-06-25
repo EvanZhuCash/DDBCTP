@@ -1,151 +1,85 @@
 {% extends "base.html" %}
 
-{% block title %}总览 - DolphinDB CTP 监控系统{% endblock %}
+{% block title %}实时Tick监控 - DolphinDB CTP 监控系统{% endblock %}
 
-{% block page_title %}系统总览{% endblock %}
+{% block page_title %}实时Tick数据监控{% endblock %}
 
 {% block content %}
-<!-- 系统状态卡片 -->
-<div class="row mb-4">
-    <div class="col-xl-3 col-md-6 mb-4">
-        <div class="card metric-card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        <div class="metric-label">DolphinDB状态</div>
-                        <div class="metric-value" id="ddb-status">
-                            <i class="fas fa-database"></i>
-                        </div>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="fas fa-server fa-2x opacity-75"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-xl-3 col-md-6 mb-4">
-        <div class="card metric-card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        <div class="metric-label">活跃策略</div>
-                        <div class="metric-value" id="active-strategies">0</div>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="fas fa-cogs fa-2x opacity-75"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-xl-3 col-md-6 mb-4">
-        <div class="card metric-card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        <div class="metric-label">内存使用率</div>
-                        <div class="metric-value" id="memory-usage">0%</div>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="fas fa-memory fa-2x opacity-75"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-xl-3 col-md-6 mb-4">
-        <div class="card metric-card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        <div class="metric-label">CPU使用率</div>
-                        <div class="metric-value" id="cpu-usage">0%</div>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="fas fa-microchip fa-2x opacity-75"></i>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 图表区域 -->
-<div class="row mb-4">
-    <div class="col-lg-8">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="card-title mb-0">
-                    <i class="fas fa-chart-line me-2"></i>
-                    系统性能趋势
-                </h5>
-            </div>
-            <div class="card-body">
-                <div class="chart-container">
-                    <canvas id="performance-chart"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-lg-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="card-title mb-0">
-                    <i class="fas fa-table me-2"></i>
-                    流表状态
-                </h5>
-            </div>
-            <div class="card-body">
-                <div id="stream-tables-status">
-                    <div class="text-center text-muted">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        加载中...
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 策略性能概览 -->
+<!-- 实时Tick数据显示 -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
             <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="card-title mb-0">
-                    <i class="fas fa-chart-bar me-2"></i>
-                    策略性能概览
+                    <i class="fas fa-chart-line me-2"></i>
+                    实时Tick数据流 - IC2311
                 </h5>
-                <button class="btn btn-sm btn-outline-primary" onclick="refreshStrategyPerformance()">
-                    <i class="fas fa-sync-alt"></i> 刷新
-                </button>
+                <div>
+                    <span class="badge bg-success" id="connection-status">连接中...</span>
+                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="refreshTickData()">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
             </div>
             <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">最新价格</div>
+                            <div class="metric-value text-primary" id="last-price">--</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">买价</div>
+                            <div class="metric-value text-success" id="bid-price">--</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">卖价</div>
+                            <div class="metric-value text-danger" id="ask-price">--</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">价差</div>
+                            <div class="metric-value text-warning" id="spread">--</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">成交量</div>
+                            <div class="metric-value text-info" id="volume">--</div>
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <div class="text-center">
+                            <div class="metric-label">Tick计数</div>
+                            <div class="metric-value text-secondary" id="tick-count">0</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
+                    <table class="table table-sm table-hover">
+                        <thead class="table-dark">
                             <tr>
-                                <th>策略名称</th>
-                                <th>品种</th>
-                                <th>PnL</th>
-                                <th>NAV</th>
-                                <th>Sharpe比率</th>
-                                <th>最大回撤</th>
-                                <th>胜率</th>
-                                <th>交易次数</th>
-                                <th>状态</th>
+                                <th>时间</th>
+                                <th>最新价</th>
+                                <th>买价(量)</th>
+                                <th>卖价(量)</th>
+                                <th>价差</th>
+                                <th>价差%</th>
+                                <th>成交量</th>
+                                <th>成交额</th>
                             </tr>
                         </thead>
-                        <tbody id="strategy-performance-table">
+                        <tbody id="tick-data-table">
                             <tr>
-                                <td colspan="9" class="text-center text-muted">
+                                <td colspan="8" class="text-center text-muted">
                                     <i class="fas fa-spinner fa-spin"></i>
-                                    加载策略性能数据...
+                                    等待Tick数据...
                                 </td>
                             </tr>
                         </tbody>
@@ -156,21 +90,86 @@
     </div>
 </div>
 
-<!-- 最近警报 -->
-<div class="row">
-    <div class="col-12">
+<!-- 价差统计图表 -->
+<div class="row mb-4">
+    <div class="col-lg-8">
         <div class="card">
             <div class="card-header">
                 <h5 class="card-title mb-0">
-                    <i class="fas fa-exclamation-triangle me-2"></i>
-                    最近警报
+                    <i class="fas fa-chart-area me-2"></i>
+                    价差趋势图
                 </h5>
             </div>
             <div class="card-body">
-                <div id="recent-alerts">
+                <div class="chart-container">
+                    <canvas id="spread-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-signal me-2"></i>
+                    交易信号
+                </h5>
+            </div>
+            <div class="card-body">
+                <div id="trading-signals">
                     <div class="text-center text-muted">
-                        <i class="fas fa-check-circle text-success"></i>
-                        暂无警报
+                        <i class="fas fa-spinner fa-spin"></i>
+                        等待交易信号...
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- PnL和持仓信息 -->
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-wallet me-2"></i>
+                    实时PnL
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6">
+                        <div class="metric-label">总盈亏</div>
+                        <div class="metric-value" id="total-pnl">0.00</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="metric-label">交易次数</div>
+                        <div class="metric-value" id="trade-count">0</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-balance-scale me-2"></i>
+                    当前持仓
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6">
+                        <div class="metric-label">持仓数量</div>
+                        <div class="metric-value" id="position-qty">0</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="metric-label">持仓价格</div>
+                        <div class="metric-value" id="position-price">--</div>
                     </div>
                 </div>
             </div>
@@ -192,33 +191,33 @@
                 <div class="row g-3">
                     <div class="col-md-3">
                         <div class="d-grid">
-                            <button class="btn btn-outline-primary" onclick="quickRestartStrategies()">
-                                <i class="fas fa-redo me-2"></i>
-                                重启所有策略
+                            <button class="btn btn-outline-success" onclick="startTickDemo()">
+                                <i class="fas fa-play me-2"></i>
+                                启动Tick演示
                             </button>
                         </div>
                     </div>
                     <div class="col-md-3">
                         <div class="d-grid">
-                            <button class="btn btn-outline-info" onclick="quickSystemCheck()">
-                                <i class="fas fa-stethoscope me-2"></i>
-                                系统健康检查
+                            <button class="btn btn-outline-danger" onclick="stopTickDemo()">
+                                <i class="fas fa-stop me-2"></i>
+                                停止Tick演示
                             </button>
                         </div>
                     </div>
                     <div class="col-md-3">
                         <div class="d-grid">
-                            <a href="/strategy" class="btn btn-outline-success">
+                            <button class="btn btn-outline-info" onclick="clearTickData()">
+                                <i class="fas fa-trash me-2"></i>
+                                清空数据
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div class="d-grid">
+                            <a href="/strategy" class="btn btn-outline-warning">
                                 <i class="fas fa-cogs me-2"></i>
                                 策略管理
-                            </a>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div class="d-grid">
-                            <a href="/monitoring" class="btn btn-outline-warning">
-                                <i class="fas fa-chart-line me-2"></i>
-                                系统监控
                             </a>
                         </div>
                     </div>
@@ -231,41 +230,73 @@
 
 {% block extra_js %}
 <script>
-    let performanceChart;
-    let systemMetrics = [];
-    
-    // 初始化性能图表
-    function initPerformanceChart() {
-        const ctx = document.getElementById('performance-chart').getContext('2d');
-        
-        performanceChart = new Chart(ctx, {
+    let spreadChart;
+    let tickData = [];
+    let tickCount = 0;
+    let refreshInterval;
+
+    // 初始化价差图表
+    function initSpreadChart() {
+        const ctx = document.getElementById('spread-chart').getContext('2d');
+
+        spreadChart = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: [],
                 datasets: [
                     {
-                        label: 'CPU使用率 (%)',
+                        label: '价差 (点)',
                         data: [],
                         borderColor: 'rgb(255, 99, 132)',
                         backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                        tension: 0.4
+                        tension: 0.4,
+                        yAxisID: 'y'
                     },
                     {
-                        label: '内存使用率 (%)',
+                        label: '价差百分比 (%)',
                         data: [],
                         borderColor: 'rgb(54, 162, 235)',
                         backgroundColor: 'rgba(54, 162, 235, 0.1)',
-                        tension: 0.4
+                        tension: 0.4,
+                        yAxisID: 'y1'
                     }
                 ]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
                 scales: {
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: '时间'
+                        }
+                    },
                     y: {
-                        beginAtZero: true,
-                        max: 100
+                        type: 'linear',
+                        display: true,
+                        position: 'left',
+                        title: {
+                            display: true,
+                            text: '价差 (点)'
+                        }
+                    },
+                    y1: {
+                        type: 'linear',
+                        display: true,
+                        position: 'right',
+                        title: {
+                            display: true,
+                            text: '价差百分比 (%)'
+                        },
+                        grid: {
+                            drawOnChartArea: false,
+                        },
                     }
                 },
                 plugins: {
@@ -276,182 +307,242 @@
             }
         });
     }
-    
-    // 更新性能图表
-    function updatePerformanceChart(metrics) {
-        if (!performanceChart || !metrics.system) return;
-        
-        const now = new Date().toLocaleTimeString();
-        
-        // 保持最近20个数据点
-        if (performanceChart.data.labels.length >= 20) {
-            performanceChart.data.labels.shift();
-            performanceChart.data.datasets[0].data.shift();
-            performanceChart.data.datasets[1].data.shift();
-        }
-        
-        performanceChart.data.labels.push(now);
-        performanceChart.data.datasets[0].data.push(metrics.system.cpu_percent);
-        performanceChart.data.datasets[1].data.push(metrics.system.memory_percent);
-        
-        performanceChart.update('none');
+
+    // 更新价差图表
+    function updateSpreadChart(spreadData) {
+        if (!spreadChart || !spreadData || spreadData.length === 0) return;
+
+        // 保持最近50个数据点
+        const maxPoints = 50;
+        const recentData = spreadData.slice(-maxPoints);
+
+        const labels = recentData.map(item => {
+            const time = new Date(item.timestamp);
+            return time.toLocaleTimeString();
+        });
+
+        const spreads = recentData.map(item => item.spread);
+        const spreadPcts = recentData.map(item => item.spread_pct);
+
+        spreadChart.data.labels = labels;
+        spreadChart.data.datasets[0].data = spreads;
+        spreadChart.data.datasets[1].data = spreadPcts;
+
+        spreadChart.update('none');
     }
-    
-    // 更新系统状态卡片
-    function updateSystemCards(metrics) {
-        if (!metrics.system) return;
-        
-        // DolphinDB状态
-        const ddbStatus = document.getElementById('ddb-status');
-        if (metrics.dolphindb && metrics.dolphindb.connected) {
-            ddbStatus.innerHTML = '<i class="fas fa-check-circle text-success"></i> 在线';
-        } else {
-            ddbStatus.innerHTML = '<i class="fas fa-times-circle text-danger"></i> 离线';
-        }
-        
-        // 内存使用率
-        document.getElementById('memory-usage').textContent = formatPercent(metrics.system.memory_percent);
-        
-        // CPU使用率
-        document.getElementById('cpu-usage').textContent = formatPercent(metrics.system.cpu_percent);
+
+    // 更新实时Tick显示
+    function updateTickDisplay(tickData) {
+        if (!tickData || tickData.length === 0) return;
+
+        const latestTick = tickData[0]; // 最新的tick数据
+
+        // 更新顶部指标
+        document.getElementById('last-price').textContent = latestTick.last_price.toFixed(2);
+        document.getElementById('bid-price').textContent = `${latestTick.bid_price.toFixed(2)}`;
+        document.getElementById('ask-price').textContent = `${latestTick.ask_price.toFixed(2)}`;
+        document.getElementById('spread').textContent = latestTick.spread.toFixed(2);
+        document.getElementById('volume').textContent = latestTick.volume;
+
+        // 更新tick计数
+        tickCount = Math.max(tickCount, tickData.length);
+        document.getElementById('tick-count').textContent = tickCount;
+
+        // 更新表格
+        updateTickTable(tickData);
     }
-    
-    // 更新流表状态
-    function updateStreamTablesStatus(streamTables) {
-        const container = document.getElementById('stream-tables-status');
-        
-        if (!streamTables) {
-            container.innerHTML = '<div class="text-center text-muted">无法获取流表状态</div>';
-            return;
-        }
-        
-        let html = '';
-        for (const [tableName, status] of Object.entries(streamTables)) {
-            const statusIcon = status.exists ? 
-                '<i class="fas fa-check-circle text-success"></i>' : 
-                '<i class="fas fa-times-circle text-danger"></i>';
-            
-            html += `
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <div>
-                        ${statusIcon}
-                        <span class="ms-2">${tableName}</span>
-                    </div>
-                    <span class="badge bg-secondary">${formatNumber(status.row_count, 0)}</span>
-                </div>
-            `;
-        }
-        
-        container.innerHTML = html;
-    }
-    
-    // 加载策略性能数据
-    function loadStrategyPerformance() {
-        fetch('/api/strategy/performance')
-            .then(response => response.json())
-            .then(data => {
-                if (data.success) {
-                    updateStrategyPerformanceTable(data.data);
-                    updateActiveStrategiesCount(data.data);
-                } else {
-                    console.error('加载策略性能失败:', data.error);
-                }
-            })
-            .catch(error => {
-                console.error('加载策略性能错误:', error);
-            });
-    }
-    
-    // 更新策略性能表格
-    function updateStrategyPerformanceTable(performanceData) {
-        const tbody = document.getElementById('strategy-performance-table');
-        
-        if (!performanceData || performanceData.length === 0) {
+
+    // 更新Tick数据表格
+    function updateTickTable(tickData) {
+        const tbody = document.getElementById('tick-data-table');
+
+        if (!tickData || tickData.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="9" class="text-center text-muted">暂无策略性能数据</td>
+                    <td colspan="8" class="text-center text-muted">暂无Tick数据</td>
                 </tr>
             `;
             return;
         }
-        
+
         let html = '';
-        performanceData.slice(0, 10).forEach(item => {  // 只显示最近10条
-            const pnlClass = item.pnl >= 0 ? 'text-success' : 'text-danger';
-            const statusBadge = item.pnl >= 0 ? 
-                '<span class="badge bg-success">盈利</span>' : 
-                '<span class="badge bg-danger">亏损</span>';
-            
+        tickData.slice(0, 20).forEach(tick => {  // 只显示最近20条
+            const time = new Date(tick.timestamp).toLocaleTimeString();
+            const spreadPct = (tick.spread_pct || 0).toFixed(3);
+
             html += `
                 <tr>
-                    <td><strong>${item.strategy_name}</strong></td>
-                    <td>${item.symbol}</td>
-                    <td class="${pnlClass}">${formatNumber(item.pnl)}</td>
-                    <td>${formatNumber(item.nav, 4)}</td>
-                    <td>${formatNumber(item.sharpe, 3)}</td>
-                    <td>${formatPercent(item.max_drawdown * 100)}</td>
-                    <td>${formatPercent(item.win_rate * 100)}</td>
-                    <td>${item.total_trades}</td>
-                    <td>${statusBadge}</td>
+                    <td><small>${time}</small></td>
+                    <td><strong>${tick.last_price.toFixed(2)}</strong></td>
+                    <td class="text-success">${tick.bid_price.toFixed(2)}(${tick.bid_volume})</td>
+                    <td class="text-danger">${tick.ask_price.toFixed(2)}(${tick.ask_volume})</td>
+                    <td class="text-warning">${tick.spread.toFixed(2)}</td>
+                    <td class="text-info">${spreadPct}%</td>
+                    <td>${tick.volume}</td>
+                    <td>${tick.turnover.toFixed(2)}</td>
                 </tr>
             `;
         });
-        
+
         tbody.innerHTML = html;
     }
-    
-    // 更新活跃策略数量
-    function updateActiveStrategiesCount(performanceData) {
-        const activeCount = performanceData ? performanceData.length : 0;
-        document.getElementById('active-strategies').textContent = activeCount;
+
+    // 更新交易信号显示
+    function updateTradingSignals(signalData) {
+        const container = document.getElementById('trading-signals');
+
+        if (!signalData || signalData.length === 0) {
+            container.innerHTML = '<div class="text-center text-muted">暂无交易信号</div>';
+            return;
+        }
+
+        let html = '';
+        signalData.slice(0, 10).forEach(signal => {  // 只显示最近10个信号
+            const time = new Date(signal.timestamp).toLocaleTimeString();
+            const signalClass = signal.signal.includes('LONG') ? 'text-success' :
+                               signal.signal.includes('SHORT') ? 'text-danger' : 'text-warning';
+
+            html += `
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <div>
+                        <small class="text-muted">${time}</small><br>
+                        <span class="${signalClass}"><strong>${signal.signal}</strong></span>
+                    </div>
+                    <span class="badge bg-primary">${signal.price.toFixed(2)}</span>
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
     }
-    
-    // 加载系统状态
-    function loadSystemStatus() {
-        fetch('/api/system/status')
+
+    // 更新PnL和持仓信息
+    function updatePnLAndPosition(pnl, tradeCount, position, positionPrice) {
+        const pnlClass = pnl >= 0 ? 'text-success' : 'text-danger';
+        const positionClass = position > 0 ? 'text-success' : position < 0 ? 'text-danger' : 'text-muted';
+
+        document.getElementById('total-pnl').innerHTML = `<span class="${pnlClass}">${pnl.toFixed(2)}</span>`;
+        document.getElementById('trade-count').textContent = tradeCount;
+        document.getElementById('position-qty').innerHTML = `<span class="${positionClass}">${position}</span>`;
+        document.getElementById('position-price').textContent = position !== 0 ? positionPrice.toFixed(2) : '--';
+    }
+
+    // 加载实时Tick数据
+    function loadLiveTickData() {
+        fetch('/api/market/live_ticks')
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    updateSystemCards(data.data);
-                    updatePerformanceChart(data.data);
-                    
-                    if (data.data.dolphindb && data.data.dolphindb.stream_tables) {
-                        updateStreamTablesStatus(data.data.dolphindb.stream_tables);
-                    }
+                    updateTickDisplay(data.data);
+                    document.getElementById('connection-status').textContent = '已连接';
+                    document.getElementById('connection-status').className = 'badge bg-success';
                 } else {
-                    console.error('加载系统状态失败:', data.error);
+                    console.error('加载Tick数据失败:', data.error);
+                    document.getElementById('connection-status').textContent = '连接失败';
+                    document.getElementById('connection-status').className = 'badge bg-danger';
                 }
             })
             .catch(error => {
-                console.error('加载系统状态错误:', error);
+                console.error('加载Tick数据错误:', error);
+                document.getElementById('connection-status').textContent = '连接错误';
+                document.getElementById('connection-status').className = 'badge bg-danger';
             });
     }
-    
-    // 刷新策略性能数据
-    function refreshStrategyPerformance() {
-        loadStrategyPerformance();
-        showNotification('策略性能数据已刷新', 'success');
+
+    // 加载价差统计数据
+    function loadSpreadStats() {
+        fetch('/api/market/spread_stats')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateSpreadChart(data.data);
+                } else {
+                    console.error('加载价差数据失败:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('加载价差数据错误:', error);
+            });
     }
-    
-    // 刷新页面数据
-    window.refreshPageData = function() {
-        loadSystemStatus();
-        loadStrategyPerformance();
+
+    // 加载交易信号
+    function loadTradingSignals() {
+        fetch('/api/strategy/signals')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    updateTradingSignals(data.data);
+                } else {
+                    console.error('加载交易信号失败:', data.error);
+                }
+            })
+            .catch(error => {
+                console.error('加载交易信号错误:', error);
+            });
+    }
+
+    // 快速操作函数
+    function startTickDemo() {
+        showNotification('正在启动Tick演示...', 'info');
+        // 这里可以添加启动演示的API调用
+        console.log('启动Tick演示');
+    }
+
+    function stopTickDemo() {
+        showNotification('正在停止Tick演示...', 'warning');
+        // 这里可以添加停止演示的API调用
+        console.log('停止Tick演示');
+    }
+
+    function clearTickData() {
+        showNotification('正在清空Tick数据...', 'info');
+        // 清空显示
+        document.getElementById('tick-data-table').innerHTML = `
+            <tr>
+                <td colspan="8" class="text-center text-muted">数据已清空</td>
+            </tr>
+        `;
+        tickCount = 0;
+        document.getElementById('tick-count').textContent = '0';
+        console.log('清空Tick数据');
+    }
+
+    // 刷新Tick数据
+    function refreshTickData() {
+        loadLiveTickData();
+        loadSpreadStats();
+        loadTradingSignals();
         showNotification('数据已刷新', 'success');
-    };
-    
+    }
+
+    // 加载所有数据
+    function loadAllData() {
+        loadLiveTickData();
+        loadSpreadStats();
+        loadTradingSignals();
+    }
+
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
-        // 注释掉旧的初始化代码，使用新的仪表板控制器
-        // initPerformanceChart();
-        // loadSystemStatus();
-        // loadStrategyPerformance();
+        // 初始化图表
+        initSpreadChart();
 
-        // 每30秒自动刷新系统状态
-        // setInterval(loadSystemStatus, 30000);
+        // 加载初始数据
+        loadAllData();
 
-        // 每60秒自动刷新策略性能
-        // setInterval(loadStrategyPerformance, 60000);
+        // 设置自动刷新
+        refreshInterval = setInterval(function() {
+            loadAllData();
+        }, 2000); // 每2秒刷新一次，实时性更好
+
+        console.log('实时Tick监控系统已初始化');
+    });
+
+    // 页面卸载时清理
+    window.addEventListener('beforeunload', function() {
+        if (refreshInterval) {
+            clearInterval(refreshInterval);
+        }
     });
 </script>
 

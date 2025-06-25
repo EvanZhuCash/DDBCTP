@@ -2,13 +2,17 @@
 
 /* 全局样式 */
 :root {
-    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --success-color: #28a745;
-    --warning-color: #ffc107;
-    --danger-color: #dc3545;
-    --info-color: #17a2b8;
-    --dark-bg: #1e1e1e;
-    --light-bg: #f8f9fa;
+    --primary-color: #2c3e50;
+    --secondary-color: #34495e;
+    --primary-gradient: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+    --success-color: #27ae60;
+    --warning-color: #f39c12;
+    --danger-color: #e74c3c;
+    --info-color: #3498db;
+    --accent-color: #e67e22;
+    --muted-color: #95a5a6;
+    --dark-bg: #2c3e50;
+    --light-bg: #ecf0f1;
 }
 
 body {
@@ -342,8 +346,8 @@ body {
 }
 
 .form-control:focus, .form-select:focus {
-    border-color: #667eea;
-    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(44, 62, 80, 0.25);
 }
 
 /* 响应式设计 */

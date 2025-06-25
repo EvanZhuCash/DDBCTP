@@ -41,6 +41,80 @@
     </div>
 </div>
 
+<!-- 实时Tick数据显示 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-chart-line me-2"></i>
+                    实时Tick数据 & 价差监控
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <!-- 实时价格显示 -->
+                    <div class="col-md-8">
+                        <div class="row g-3">
+                            <div class="col-md-3">
+                                <div class="card bg-primary text-white">
+                                    <div class="card-body text-center">
+                                        <h4 class="mb-0" id="last-price">--</h4>
+                                        <small>最新价</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-success text-white">
+                                    <div class="card-body text-center">
+                                        <h4 class="mb-0" id="bid-price">--</h4>
+                                        <small>买一价</small>
+                                        <div class="small" id="bid-volume">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-danger text-white">
+                                    <div class="card-body text-center">
+                                        <h4 class="mb-0" id="ask-price">--</h4>
+                                        <small>卖一价</small>
+                                        <div class="small" id="ask-volume">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-warning text-white">
+                                    <div class="card-body text-center">
+                                        <h4 class="mb-0" id="spread-value">--</h4>
+                                        <small>价差</small>
+                                        <div class="small" id="spread-pct">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tick流显示 -->
+                        <div class="mt-3">
+                            <h6>实时Tick流</h6>
+                            <div id="tick-stream" class="border rounded p-2" style="height: 200px; overflow-y: auto; background-color: #f8f9fa; font-family: monospace; font-size: 0.85rem;">
+                                <div class="text-muted text-center py-3">等待Tick数据...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 价差统计图表 -->
+                    <div class="col-md-4">
+                        <h6>价差趋势</h6>
+                        <div class="chart-container" style="height: 250px;">
+                            <canvas id="spread-chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- 策略控制矩阵 -->
 <div class="row mb-4">
     <div class="col-12">
@@ -95,18 +169,32 @@
     </div>
     
     <div class="col-lg-4">
+        <!-- 当前持仓 -->
+        <div class="card mb-3">
+            <div class="card-header">
+                <h6 class="card-title mb-0">
+                    <i class="fas fa-wallet me-2"></i>
+                    当前持仓
+                </h6>
+            </div>
+            <div class="card-body p-0">
+                <div id="current-positions-container">
+                    <div class="text-muted text-center py-3">加载中...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 最近信号 -->
         <div class="card">
             <div class="card-header">
-                <h5 class="card-title mb-0">
-                    <i class="fas fa-list me-2"></i>
-                    策略操作日志
-                </h5>
+                <h6 class="card-title mb-0">
+                    <i class="fas fa-signal me-2"></i>
+                    最近信号
+                </h6>
             </div>
-            <div class="card-body" style="max-height: 350px; overflow-y: auto;">
-                <div id="strategy-logs">
-                    <div class="text-center text-muted">
-                        暂无操作记录
-                    </div>
+            <div class="card-body p-0" style="max-height: 250px; overflow-y: auto;">
+                <div id="recent-signals-container">
+                    <div class="text-muted text-center py-3">加载中...</div>
                 </div>
             </div>
         </div>
