@@ -12,8 +12,8 @@ formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-from vnpy_ctp import CtpGateway
-from vnpy_ctp.api import (
+from vnpy_ctp.vnpy_ctp import CtpGateway
+from vnpy_ctp.vnpy_ctp.api import (
   MdApi,
   TdApi,
   THOST_FTDC_OPT_LimitPrice,
@@ -1028,8 +1028,8 @@ if __name__ == "__main__":
   db.position_update()
   db.cancel_order()
   
-  s.subscribe("localhost", 8900, handler, "orderStream", offset=-1, throttle=0.1)
-  s.subscribe("localhost", 8900, handler_cancel, "cancelStream", offset=-1, throttle=0.1)
+  s.subscribe("localhost", 8848, handler, "orderStream", offset=-1, throttle=0.1)
+  s.subscribe("localhost", 8848, handler_cancel, "cancelStream", offset=-1, throttle=0.1)
   
   gateway = ctp_gateway(s, order_fail_queue, logger)
   gateway.connect(ctp_setting)

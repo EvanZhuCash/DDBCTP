@@ -93,15 +93,15 @@
                     <i class="fas fa-chart-area me-2"></i>
                     系统资源趋势
                 </h5>
-                <div class="btn-group btn-group-sm">
-                    <button class="btn btn-outline-primary active" onclick="setChartTimeRange('1h')">1小时</button>
-                    <button class="btn btn-outline-primary" onclick="setChartTimeRange('6h')">6小时</button>
-                    <button class="btn btn-outline-primary" onclick="setChartTimeRange('24h')">24小时</button>
+                <div class="btn-group btn-group-sm time-range-controls">
+                    <button class="btn btn-outline-primary active time-range-btn" data-range="1h">1小时</button>
+                    <button class="btn btn-outline-primary time-range-btn" data-range="6h">6小时</button>
+                    <button class="btn btn-outline-primary time-range-btn" data-range="24h">24小时</button>
                 </div>
             </div>
             <div class="card-body">
                 <div class="chart-container">
-                    <canvas id="system-metrics-chart"></canvas>
+                    <canvas id="system-performance-chart"></canvas>
                 </div>
             </div>
         </div>
@@ -612,8 +612,12 @@
     
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', function() {
-        initWebSocket();
-        initSystemChart();
+        // 注释掉旧的初始化代码，使用新的监控控制器
+        // initWebSocket();
+        // initSystemChart();
     });
 </script>
+
+<!-- Monitoring Page JavaScript -->
+<script src="{{ url_for('static', filename='js/monitoring.js') }}"></script>
 {% endblock %}

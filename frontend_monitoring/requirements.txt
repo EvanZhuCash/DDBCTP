@@ -1,29 +1,26 @@
-# DolphinDB CTP 前端监控系统依赖
+# DolphinDB CTP Frontend Monitoring System Dependencies
 
-# Web框架
+# Web Framework
 Flask>=2.3.0
 Flask-SocketIO>=5.3.0
 
-# DolphinDB连接
+# DolphinDB Connection
 dolphindb>=1.30.22.5
 
-# 数据处理
+# Data Processing
 pandas>=1.3.0
 numpy>=1.21.0
 
-# 系统监控
+# System Monitoring
 psutil>=5.8.0
 
-# WebSocket支持
+# WebSocket Support
 python-socketio>=5.8.0
 eventlet>=0.33.0
 
-# 日期时间处理
+# Date Time Processing
 python-dateutil>=2.8.0
 
-# JSON处理（标准库，无需安装）
-# json
-
-# 开发和测试
+# Development and Testing
 pytest>=6.0.0
 pytest-flask>=1.2.0

@@ -12,8 +12,8 @@ formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-from vnpy_ctp.vnpy_ctp import CtpGateway
-from vnpy_ctp.vnpy_ctp.api import (
+from vnpy_ctp import CtpGateway
+from vnpy_ctp.api import (
   MdApi,
   TdApi,
   THOST_FTDC_OPT_LimitPrice,
@@ -78,8 +78,8 @@ OFFSET_CTP_: dict[str, str] = {v:k for k, v in OFFSET_CTP.items()}
 
 
 ctp_setting = {
-    "用户名": "224829",
-    "密码": "Evan@cash1q2",
+    "用户名": "239344",
+    "密码": "xyzhao@3026528",
     "经纪商代码": "9999",
     "交易服务器": "182.254.243.31:30001",
     "行情服务器": "182.254.243.31:30011",
@@ -98,42 +98,30 @@ stop_event = Event()
 class ddb_server():
   def __init__(self):
     self.session = ddb.session()
-    self.session.connect("localhost", 8848, "admin", "123456")
+    self.session.connect("localhost", 8900, "admin", "123456")
     
   def create_streamTable(self):
-    tables = [
-      ("trades", "share streamTable(1000:0, `symbol`timestamp`price`qty`dir`offset`exchange, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL, SYMBOL, SYMBOL]) as trades"),
-      ("tickStream", "share streamTable(1000:0, `symbol`timestamp`price`vol, [SYMBOL, TIMESTAMP, DOUBLE, INT]) as tickStream"),
-      ("unrealized_positions", "share streamTable(1:0, `symbol`timestamp`price`pnl`dir, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, SYMBOL]) as unrealized_positions"),
-      ("realized_positions", "share streamTable(1:0, `symbol`timestamp_close`price_open`price_close`qty`pnl, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, INT, DOUBLE]) as realized_positions"),
-      ("orderStream", "share streamTable(1000:0, `orderID`symbol`timestamp`orderPrice`orderVolume`direction, [INT, SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL]) as orderStream"),
-      ("bollST", "share streamTable(1000:0, `symbol`timestamp`close`upper`mean`lower, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as bollST"),
-      ("signalST", "share streamTable(1000:0, `symbol`timestamp`close`signal, [SYMBOL, TIMESTAMP, DOUBLE, STRING]) as signalST"),
-      ("agg1min", "share streamTable(1000:0, `timestamp`symbol`price, [TIMESTAMP, SYMBOL, DOUBLE]) as agg1min"),
-      ("positions_order", "share streamTable(1000:0, `orderid`timestamp`symbol`exchange`direction`offset`status`volume`traded, [INT, TIMESTAMP, SYMBOL, SYMBOL, SYMBOL, SYMBOL, SYMBOL, INT, INT]) as positions_order"),
-      ("cancelStream", "share streamTable(1:0, `orderid`symbol, [INT, SYMBOL]) as cancelStream")
-    ]
-
-    for table_name, table_sql in tables:
-      try:
-        self.session.run(table_sql)
-        print(f"Created table: {table_name}")
-      except Exception as e:
-        print(f"Table {table_name} already exists or error: {e}")
-
-    self.session.run("go")
+    self.session.run("""
+      share streamTable(1000:0, `symbol`timestamp`price`qty`dir`offset`exchange, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL, SYMBOL, SYMBOL]) as trades
+      share streamTable(1000:0, `symbol`timestamp`price`vol, [SYMBOL, TIMESTAMP, DOUBLE, INT]) as tickStream
+      share streamTable(1:0, `symbol`timestamp`price`pnl`dir, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, SYMBOL]) as unrealized_positions
+      share streamTable(1:0, `symbol`timestamp_close`price_open`price_close`qty`pnl, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, INT, DOUBLE]) as realized_positions
+      share streamTable(1000:0, `orderID`symbol`timestamp`orderPrice`orderVolume`direction, [INT, SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL]) as orderStream
+      share streamTable(1000:0, `symbol`timestamp`close`upper`mean`lower, [SYMBOL, TIMESTAMP, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as bollST
+      share streamTable(1000:0, `symbol`timestamp`close`signal, [SYMBOL, TIMESTAMP, DOUBLE, STRING]) as signalST
+      share streamTable(1000:0, `timestamp`symbol`price, [TIMESTAMP, SYMBOL, DOUBLE]) as agg1min
+      share streamTable(1000:0, `orderid`timestamp`symbol`exchange`direction`offset`status`volume`traded, [INT, TIMESTAMP, SYMBOL, SYMBOL, SYMBOL, SYMBOL, SYMBOL, INT, INT]) as positions_order
+      share streamTable(1:0, `orderid`symbol, [INT, SYMBOL]) as cancelStream
+      go
+    """)
   
   def create_table(self):
-    try:
-      self.session.run("""
-        share keyedTable(`symbol`dir, 1:0, `symbol`qty`price`dir, [SYMBOL, INT, DOUBLE, SYMBOL]) as positionTable
-        share keyedTable(`orderid, 1:0, `orderid`symbol`timestamp`price`vol`dir`offset`status`type, [INT,SYMBOL,TIMESTAMP,DOUBLE,INT,SYMBOL,SYMBOL,SYMBOL,SYMBOL]) as orders
-        share keyedTable(`symbol, 1000:0, `timestamp`symbol`long_pos`long_yd`long_td`short_pos`short_yd`short_td`long_pos_frozen`long_yd_frozen`long_td_frozen`short_pos_frozen`short_yd_frozen`short_td_frozen, [TIMESTAMP,SYMBOL,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT]) as positionholding
-        share table(1000:0, `sym1`timestamp1`price1`qty1`dir1, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL]) as pos_table
-      """)
-    except Exception as e:
-      print(f"Tables already exist or error creating tables: {e}")
-      print("Continuing with existing tables...")
+    self.session.run("""
+      share keyedTable(`symbol`dir, 1:0, `symbol`qty`price`dir, [SYMBOL, INT, DOUBLE, SYMBOL]) as positionTable
+      share keyedTable(`orderid, 1:0, `orderid`symbol`timestamp`price`vol`dir`offset`status`type, [INT,SYMBOL,TIMESTAMP,DOUBLE,INT,SYMBOL,SYMBOL,SYMBOL,SYMBOL]) as orders
+      share keyedTable(`symbol, 1000:0, `timestamp`symbol`long_pos`long_yd`long_td`short_pos`short_yd`short_td`long_pos_frozen`long_yd_frozen`long_td_frozen`short_pos_frozen`short_yd_frozen`short_td_frozen, [TIMESTAMP,SYMBOL,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT,INT]) as positionholding
+      share table(1000:0, `sym1`timestamp1`price1`qty1`dir1, [SYMBOL, TIMESTAMP, DOUBLE, INT, SYMBOL]) as pos_table
+    """)
 
   def positions(self):
     self.session.run("""
@@ -144,13 +132,11 @@ class ddb_server():
         price = msg.price[0]
         dir = msg.dir[0]
         offset = msg.offset[0]
-        print("updatePosition: Processing " + string(sym) + " " + string(vol) + " " + string(dir) + " " + string(offset) + " at " + string(price))
         if (offset == "OPEN"){
-          pos_table.append!(table(sym as sym1, timestamp as timestamp1, price as price1, vol as qty1, dir as dir1))
-          print("Added to pos_table")
+          pos_table.append!(table(sym as sym1, timestamp as timestamp1, price as price1, vol as qty1, dir as dir1)) 
         } else if (offset == "CLOSE"){
           pre_dir = iif(dir == "LONG", "SHORT", "LONG")
-          queue = select * from pos_table where (sym1 = sym and dir1 = pre_dir) order by timestamp1 asc;
+          queue = select * from pos_table where (sym1 = sym and dir1 = pre_dir) order by timestamp1 asc; 
           if (size(queue)==0){return}
           remaining = vol
           cost = 0.0
@@ -181,20 +167,17 @@ class ddb_server():
           insert into realized_positions values(sym, timestamp, avg_open, price, vol, pnl)
           dir = pre_dir
         }
-        queue =  select * from pos_table where sym1 = sym and dir1 = dir order by timestamp1 asc;
+        queue =  select * from pos_table where sym1 = sym and dir1 = dir order by timestamp1 asc; 
         if (size(queue) > 0) {
           totalVol = sum(queue.qty1)
           totalCost = sum(queue.qty1 * queue.price1)
           avgPrice = totalCost / totalVol
           insert into positionTable values(sym, totalVol, avgPrice, dir)
-          print("Updated positionTable: " + string(totalVol) + " @ " + string(avgPrice))
         }
         else {
           delete from positionTable where symbol=sym and dir=dir
-          print("Removed position from positionTable")
         }
       }
-      go
       subscribeTable(tableName="trades", actionName="trade_positions", offset=-1, handler=updatePosition{pos_table, positionTable, realized_positions}, msgAsTable=true)
       def pnl_calc(cur_price, cost_price, val, dir){
         return iif(dir=="LONG", val*(cur_price-cost_price), val*(cost_price-cur_price))
@@ -220,94 +203,54 @@ class ddb_server():
             insert into unrealized_positions values(sym_, time_, price_, pnl, dir_)
           }
         }
-      }
+      } 
       subscribeTable(tableName="tickStream", actionName="unrealized_pnl_handler", handler=unrealizedpnl{unrealized_positions, pnl_calc, positionTable}, msgAsTable=true)
     """)
   
   def simulate_order(self):
-    """Order simulation function - generates orders based on live tick data (simplified)"""
     self.session.run("""
-      // Initialize global tick counter
-      if (!exists("globalTickCounter")) {
-        globalTickCounter = 0
-      }
-
-      def order_simulator(mutable orderStream, msg){
+      def simulate_order(mutable orderStream, tickStream, positionTable, msg){
         time_ = msg.timestamp[0]
         sym_ = msg.symbol[0]
-        price_ = msg.price[0]
-
-        // Increment global tick counter
-        globalTickCounter = globalTickCounter + 1
+        num_sec = secondOfMinute(time_)
+        num_min = minuteOfHour(time_)
+        temp_ = select timestamp, price from tickStream where symbol=sym_ order by timestamp desc limit 2
+        pre_num_sec = secondOfMinute(temp_.timestamp[1])
+        orderprice = temp_.price[0]
         orderid = count(orderStream)
-
-        // Generate order every 20 ticks for testing
-        if (mod(globalTickCounter, 20) == 0) {
-          insert into orderStream values(orderid, sym_, time_, price_, 1, "OPEN_LONG")
-          print("Generated OPEN_LONG order #" + string(orderid) + " for " + string(sym_) + " at price " + string(price_) + " (tick #" + string(globalTickCounter) + ")")
+        if (mod(num_min,2)==0){
+          if ((num_sec<30)&&(div(num_sec,20)!=div(pre_num_sec,20))){
+            open_ = select qty from positionTable where symbol=sym_ and dir="LONG"
+            if ((size(open_)==0)||(open_.qty[0]<5)){
+              insert into orderStream values(orderid, sym_, time_, orderprice, 1, "OPEN_LONG")
+            }
+          }
+          else if ((num_sec>30)&&(div(num_sec,20)!=div(pre_num_sec,20))){
+            close_ = select qty from positionTable where symbol=sym_ and dir="LONG"
+            if ((size(close_)>0)&&(close_.qty[0]>=1)){
+              insert into orderStream values(orderid, sym_, time_, orderprice, 1, "CLOSE_LONG")
+            } 
+          }
+        }
+        else if (mod(num_min,2)==1){
+          if ((num_sec<30)&&(div(num_sec,20)!=div(pre_num_sec,20))){
+            open_ = select qty from positionTable where symbol=sym_ and dir="SHORT"
+            if ((size(open_)==0)||(open_.qty[0]<5)){
+              insert into orderStream values(orderid, sym_, time_, orderprice, 1, "OPEN_SHORT")
+            }
+          }
+          else if ((num_sec>30)&&(div(num_sec,20)!=div(pre_num_sec,20))){
+            close_ = select qty from positionTable where symbol=sym_ and dir="SHORT"
+            if ((size(close_)>0)&&(close_.qty[0]>=1)){
+              insert into orderStream values(orderid, sym_, time_, orderprice, 1, "CLOSE_SHORT")
+            }
+          }
         }
       }
       go
+      subscribeTable(tableName="tickStream", actionName="simulateHandler", offset=-1, handler=simulate_order{orderStream, tickStream, positionTable}, msgAsTable=true)
     """)
-
-    # Then create the subscription with a unique action name
-    import time
-    unique_suffix = str(int(time.time() * 1000) % 100000)  # Use timestamp for uniqueness
-    action_name = f"orderSim_{unique_suffix}"
-
-    try:
-      self.session.run(f"""
-        subscribeTable(tableName="tickStream", actionName="{action_name}", offset=-1, handler=order_simulator{{orderStream}}, msgAsTable=true)
-      """)
-      print(f"{action_name} subscription created")
-    except Exception as e:
-      print(f"{action_name} subscription error: {e}")
-
-  def order_to_trade_converter(self):
-    """Convert orders to trades for simulation (same as hist version)"""
-    self.session.run("""
-      def order_to_trade(mutable trades, msg){
-        orderid = msg.orderID[0]
-        sym = msg.symbol[0]
-        timestamp = msg.timestamp[0]
-        price = msg.orderPrice[0]
-        volume = msg.orderVolume[0]
-        direction = msg.direction[0]
-
-        // Convert order direction to trade direction and offset
-        if (direction == "OPEN_LONG") {
-          dir = "LONG"
-          offset = "OPEN"
-        } else if (direction == "CLOSE_LONG") {
-          dir = "SELL"  // Selling to close long position
-          offset = "CLOSE"
-        } else if (direction == "OPEN_SHORT") {
-          dir = "SHORT"
-          offset = "OPEN"
-        } else if (direction == "CLOSE_SHORT") {
-          dir = "LONG"  // Buying to close short position
-          offset = "CLOSE"
-        }
-
-        // Insert trade with slight delay to simulate execution (include exchange column)
-        insert into trades values(sym, timestamp + 100, price, volume, dir, offset, "CFFEX")
-        print("Executed trade: " + string(direction) + " " + string(volume) + " " + string(sym) + " at " + string(price))
-      }
-    """)
-
-    # Use unique action name for order-to-trade subscription
-    import time
-    unique_suffix = str(int(time.time() * 1000) % 100000)
-    action_name = f"orderToTrade_{unique_suffix}"
-
-    try:
-      self.session.run(f"""
-        subscribeTable(tableName="orderStream", actionName="{action_name}", offset=-1, handler=order_to_trade{{trades}}, msgAsTable=true)
-      """)
-      print(f"{action_name} subscription created")
-    except Exception as e:
-      print(f"{action_name} subscription error: {e}")
-
+    
   def position_update(self):
     self.session.run("""
       def update_order_handler(mutable positionholding, msg){
@@ -376,11 +319,7 @@ class ddb_server():
         }
       }
       go
-      try {
-        subscribeTable(tableName="positions_order", actionName="update_order_handler", offset=-1, handler=update_order_handler{positionholding}, msgAsTable=true)
-      } catch(ex) {
-        print("update_order_handler subscription already exists")
-      }
+      subscribeTable(tableName="positions_order", actionName="update_order_handler", offset=-1, handler=update_order_handler{positionholding}, msgAsTable=true)
       
       def update_trade_handler(mutable positionholding, msg){
           sym = msg.symbol[0]
@@ -460,12 +399,8 @@ class ddb_server():
               insert into positionholding values(timestamp, sym, long_pos, long_yd, long_td, short_pos, short_yd, short_td, long_pos_frozen, long_yd_frozen, long_td_frozen, short_pos_frozen, short_yd_frozen, short_td_frozen)
           }
       }
-      go
-      try {
-        subscribeTable(tableName="trades", actionName="update_trade_handler", offset=-1, handler=update_trade_handler{positionholding}, msgAsTable=true)
-      } catch(ex) {
-        print("update_trade_handler subscription already exists")
-      }
+      go 
+      subscribeTable(tableName="trades", actionName="update_trade_handler", offset=-1, handler=update_trade_handler{positionholding}, msgAsTable=true)
     """)
 
   def cancel_order(self):
@@ -488,11 +423,7 @@ class ddb_server():
         }
       }
       go
-      try {
-        subscribeTable(tableName="tickStream", actionName="cancelHandler", offset=-1, handler=cancel_handler{cancelStream, orders, orderdict}, msgAsTable=true)
-      } catch(ex) {
-        print("cancelHandler subscription already exists")
-      }
+      subscribeTable(tableName="tickStream", actionName="cancelHandler", offset=-1, handler=cancel_handler{cancelStream, orders, orderdict}, msgAsTable=true)
     """)
     
 class ctp_gateway(CtpGateway):
@@ -999,11 +930,6 @@ def cancel_order(gateway):
       cancel_req_ = OrderRequest_(
         symbol = symbol_,
         exchange = exchange_,
-        direction = "LONG",  # Dummy values for cancel request
-        type_ = "LIMIT",
-        volume = 1,
-        price = 0.0,
-        offset = "OPEN",
         orderid = orderid_
       )
       gateway.cancel_order(cancel_req_)
@@ -1013,33 +939,21 @@ def cancel_order(gateway):
   print("thread_cancel_order is out")
   
 if __name__ == "__main__":
-
-  print("Starting live simulation...")
+  
   # initialize dolphindb server
-  print("Creating DolphinDB server...")
   db = ddb_server()
   s = db.session
-  print("Creating stream tables...")
   db.create_streamTable()
-  print("Enabling streaming...")
   s.enableStreaming()
-  print("Creating tables...")
   db.create_table()
-  print("Setting up order simulation...")
   db.simulate_order()
-  print("Setting up order-to-trade converter...")
-  db.order_to_trade_converter()
-  print("Setting up positions...")
   db.positions()
-  print("Setting up position updates...")
   db.position_update()
-  print("Setting up cancel orders...")
   db.cancel_order()
-  print("DolphinDB setup completed!")
   
   
-  s.subscribe("localhost", 8848, handler, "orderStream", offset=-1, throttle=0.1)
-  s.subscribe("localhost", 8848, handler_cancel, "cancelStream", offset=-1, throttle=0.1)
+  s.subscribe("localhost", 8900, handler, "orderStream", offset=-1, throttle=0.1)
+  s.subscribe("localhost", 8900, handler_cancel, "cancelStream", offset=-1, throttle=0.1)
   
   gateway = ctp_gateway(s, order_fail_queue, logger)
   gateway.connect(ctp_setting)

@@ -173,6 +173,127 @@
         </div>
     </div>
 </div>
+
+<!-- 策略详情模态框 -->
+<div class="modal fade" id="strategyDetailModal" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-chart-line me-2"></i>
+                    策略详情
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row">
+                    <div class="col-md-8">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="card-title mb-0">实时性能图表</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="chart-container" style="height: 300px;">
+                                    <canvas id="strategy-detail-chart"></canvas>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="card-title mb-0">策略统计</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="row g-3">
+                                    <div class="col-6">
+                                        <div class="text-center">
+                                            <div class="h4 mb-0" id="detail-total-pnl">0</div>
+                                            <small class="text-muted">总PnL</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-center">
+                                            <div class="h4 mb-0" id="detail-win-rate">0%</div>
+                                            <small class="text-muted">胜率</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-center">
+                                            <div class="h4 mb-0" id="detail-sharpe">0</div>
+                                            <small class="text-muted">夏普比率</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="text-center">
+                                            <div class="h4 mb-0" id="detail-max-dd">0%</div>
+                                            <small class="text-muted">最大回撤</small>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <hr>
+
+                                <div class="mb-3">
+                                    <label class="form-label small">当前状态</label>
+                                    <div id="detail-status" class="badge bg-secondary">未知</div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label small">最后更新</label>
+                                    <div id="detail-last-update" class="small text-muted">N/A</div>
+                                </div>
+
+                                <div class="mb-3">
+                                    <label class="form-label small">今日交易次数</label>
+                                    <div id="detail-today-trades" class="fw-bold">0</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-outline-primary" onclick="exportStrategyData()">
+                    <i class="fas fa-download me-1"></i>导出数据
+                </button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="fas fa-times me-1"></i>关闭
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 批量操作确认模态框 -->
+<div class="modal fade" id="batchOperationModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-exclamation-triangle me-2 text-warning"></i>
+                    确认批量操作
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p id="batch-operation-message">确定要执行此批量操作吗？</p>
+                <div class="alert alert-warning">
+                    <i class="fas fa-info-circle me-2"></i>
+                    此操作将影响所有策略，请谨慎操作。
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                    <i class="fas fa-times me-1"></i>取消
+                </button>
+                <button type="button" class="btn btn-warning" id="confirm-batch-operation">
+                    <i class="fas fa-check me-1"></i>确认执行
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
@@ -557,13 +678,13 @@
     document.addEventListener('DOMContentLoaded', function() {
         initWebSocket();
         initStrategyChart();
-        loadStrategyMatrix();
-
-        // 每30秒自动刷新策略矩阵
-        setInterval(loadStrategyMatrix, 30000);
-
-        // 添加初始日志
-        addStrategyLog('策略控制面板已加载');
+        // 注释掉旧的初始化代码，使用新的策略控制器
+        // loadStrategyMatrix();
+        // setInterval(loadStrategyMatrix, 30000);
+        // addStrategyLog('策略控制面板已加载');
     });
 </script>
+
+<!-- Strategy Page JavaScript -->
+<script src="{{ url_for('static', filename='js/strategy.js') }}"></script>
 {% endblock %}
