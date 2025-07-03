@@ -1,0 +1,37 @@
+# IB Multi-Gateway Trading System Requirements
+
+# Core dependencies
+dolphindb>=1.30.22.5
+ib_insync>=0.9.86
+asyncio-mqtt>=0.16.1
+
+# VeighNa crypto gateways (optional, for crypto trading)
+vnpy>=3.9.0
+vnpy_binance>=1.0.0
+vnpy_okx>=1.0.0
+vnpy_bybit>=1.0.0
+vnpy_gateio>=1.0.0
+
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Networking and async
+aiohttp>=3.8.0
+websockets>=11.0.0
+
+# Logging and monitoring
+loguru>=0.7.0
+
+# Configuration
+pyyaml>=6.0
+python-dotenv>=1.0.0
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# Optional: For enhanced functionality
+# ccxt>=4.0.0  # Alternative crypto exchange library
+# ta-lib>=0.4.0  # Technical analysis
+# plotly>=5.0.0  # Visualization
