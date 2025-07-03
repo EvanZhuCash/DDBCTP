@@ -1,0 +1,3 @@
+[submodule "vnpy_ctp"]
+	path = vnpy_ctp
+	url = https://gitee.com/vnpy/vnpy_ctp.git
