@@ -33,87 +33,170 @@ logger = logging.getLogger(__name__)
 
 
 class ContractDiscovery:
-    """期货合约发现器 - 从CTP获取所有活跃期货合约"""
+    """期货合约发现器 - 从CTP动态获取所有活跃期货合约"""
 
-    def __init__(self):
+    def __init__(self, ctp_setting: Optional[Dict] = None):
         self.futures_contracts = []
         self.logger = logger
+        self.ctp_setting = ctp_setting
+        self.ctp_api = None
+        self.contract_query_complete = False
+        self.discovered_contracts = []
 
     def get_all_futures_contracts(self) -> List[str]:
-        """获取所有期货合约，排除期权 - 生成完整的1700+合约列表"""
-        # 直接生成完整的期货合约列表，确保覆盖所有品种和到期月份
-        self.logger.info("生成完整期货合约列表")
-        known_contracts = self._generate_complete_futures_list()
+        """动态获取所有期货合约，排除期权"""
+        if self.ctp_setting:
+            self.logger.info("使用CTP API动态发现期货合约")
+            return self._discover_contracts_from_ctp()
+        else:
+            self.logger.error("未提供CTP配置，无法进行合约发现")
+            self.logger.error("请提供有效的CTP配置以启用动态合约发现")
+            raise ValueError("CTP配置缺失：动态合约发现需要有效的CTP配置")
 
-        # 过滤出期货合约（排除期权）
-        futures_contracts = []
-        for contract in known_contracts:
-            # 简单的期货合约识别：不包含C、P等期权标识
-            if not any(opt_char in contract.upper() for opt_char in ['C-', 'P-', '-C', '-P', 'CALL', 'PUT']):
-                futures_contracts.append(contract)
+    def _discover_contracts_from_ctp(self) -> List[str]:
+        """从CTP API动态发现合约"""
+        try:
+            # 导入CTP API
+            from vnpy_ctp.api import TdApi, THOST_FTDC_PC_Futures
 
-        self.logger.info(f"发现 {len(futures_contracts)} 个期货合约")
-        self.futures_contracts = futures_contracts
-        return futures_contracts
+            class ContractQueryApi(TdApi):
+                def __init__(self, discovery_instance):
+                    super().__init__()
+                    self.discovery = discovery_instance
+                    self.reqid = 0
+                    self.login_status = False
+                    self.auth_status = False
 
-    def _generate_complete_futures_list(self) -> List[str]:
-        """生成完整的期货合约列表，包含所有品种和到期月份"""
-        contracts = []
+                def onFrontConnected(self):
+                    self.discovery.logger.info("CTP交易前置连接成功")
+                    self.authenticate()
 
-        # 定义所有期货品种和交易所
-        futures_symbols = {
-            # 中金所 CFFEX
-            'CFFEX': ['IC', 'IF', 'IH', 'IM', 'T', 'TF', 'TS', 'TL'],
+                def onRspAuthenticate(self, data, error, reqid, last):
+                    if error["ErrorID"] == 0:
+                        self.discovery.logger.info("CTP认证成功")
+                        self.auth_status = True
+                        self.login()
+                    else:
+                        self.discovery.logger.error(f"CTP认证失败: {error}")
 
-            # 上期所 SHFE
-            'SHFE': ['rb', 'au', 'ag', 'fu', 'ru', 'cu', 'al', 'zn', 'ni', 'sn', 'pb',
-                     'hc', 'ss', 'bc', 'sp', 'wr', 'bu'],
+                def onRspUserLogin(self, data, error, reqid, last):
+                    if error["ErrorID"] == 0:
+                        self.discovery.logger.info("CTP登录成功")
+                        self.login_status = True
+                        self.query_instruments()
+                    else:
+                        self.discovery.logger.error(f"CTP登录失败: {error}")
 
-            # 大商所 DCE
-            'DCE': ['p', 'i', 'jm', 'm', 'y', 'eb', 'v', 'pp', 'c', 'cs', 'a', 'b',
-                    'jd', 'l', 'pg', 'rr', 'fb', 'bb', 'lh', 'j'],
+                def onRspQryInstrument(self, data, error, reqid, last):
+                    """合约查询回报"""
+                    if data and data.get("ProductClass") == THOST_FTDC_PC_Futures:
+                        # 只收集期货合约
+                        instrument_id = data.get("InstrumentID", "")
+                        if instrument_id and self._is_valid_futures_contract(instrument_id):
+                            self.discovery.discovered_contracts.append(instrument_id)
 
-            # 郑商所 CZCE (使用3位数字)
-            'CZCE': ['MA', 'OI', 'TA', 'SH', 'FG', 'SA', 'UR', 'SR', 'CF', 'CY',
-                     'AP', 'CJ', 'PK', 'RM', 'ZC', 'SF', 'SM', 'WH', 'PM', 'RI', 'LR', 'JR'],
+                    if last:
+                        self.discovery.logger.info(f"合约查询完成，发现 {len(self.discovery.discovered_contracts)} 个期货合约")
+                        self.discovery.contract_query_complete = True
 
-            # 上海国际能源交易中心 INE
-            'INE': ['sc', 'lu', 'nr', 'bc', 'ec']
-        }
+                def _is_valid_futures_contract(self, instrument_id: str) -> bool:
+                    """验证是否为有效的期货合约（排除期权等）"""
+                    # 排除包含期权标识的合约
+                    option_indicators = ['C-', 'P-', '-C', '-P', 'CALL', 'PUT']
+                    if any(indicator in instrument_id.upper() for indicator in option_indicators):
+                        return False
 
-        # 生成到期月份 (当前年份和下一年份的所有月份)
-        current_year = 25  # 2025年
-        next_year = 26     # 2026年
+                    # 基本长度检查（期货合约通常6-8位）
+                    if len(instrument_id) < 4 or len(instrument_id) > 10:
+                        return False
 
-        # 标准月份
-        months = ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10', '11', '12']
+                    return True
 
-        # 为每个交易所和品种生成合约
-        for exchange, symbols in futures_symbols.items():
-            for symbol in symbols:
-                for year in [current_year, next_year]:
-                    for month in months:
-                        if exchange == 'CZCE':
-                            # 郑商所使用3位数字格式
-                            contract = f"{symbol}{year:02d}{month}"
-                        else:
-                            # 其他交易所使用4位数字格式
-                            contract = f"{symbol}20{year:02d}{month}"
-                        contracts.append(contract)
+                def authenticate(self):
+                    req = {
+                        "BrokerID": self.discovery.ctp_setting["经纪商代码"],
+                        "UserID": self.discovery.ctp_setting["用户名"],
+                        "AuthCode": self.discovery.ctp_setting.get("授权编码", ""),
+                        "AppID": self.discovery.ctp_setting.get("产品名称", "")
+                    }
+                    self.reqid += 1
+                    self.reqAuthenticate(req, self.reqid)
 
-        self.logger.info(f"生成了 {len(contracts)} 个期货合约")
-        return contracts
+                def login(self):
+                    req = {
+                        "BrokerID": self.discovery.ctp_setting["经纪商代码"],
+                        "UserID": self.discovery.ctp_setting["用户名"],
+                        "Password": self.discovery.ctp_setting["密码"]
+                    }
+                    self.reqid += 1
+                    self.reqUserLogin(req, self.reqid)
+
+                def query_instruments(self):
+                    """查询所有合约"""
+                    self.discovery.logger.info("开始查询所有合约...")
+                    self.reqid += 1
+                    # 空字典表示查询所有合约
+                    self.reqQryInstrument({}, self.reqid)
+
+            # 创建API实例
+            self.ctp_api = ContractQueryApi(self)
+
+            # 连接CTP - 修正API调用方式
+            self.ctp_api.createFtdcTraderApi("")
+            self.ctp_api.subscribePrivateTopic(0)
+            self.ctp_api.subscribePublicTopic(0)
+            self.ctp_api.registerFront(self.ctp_setting["交易服务器"])
+            self.ctp_api.init()
+
+            # 等待查询完成（最多等待30秒）
+            import time
+            timeout = 30
+            start_time = time.time()
+
+            while not self.contract_query_complete and (time.time() - start_time) < timeout:
+                time.sleep(0.1)
+
+            if self.contract_query_complete:
+                self.futures_contracts = self.discovered_contracts.copy()
+                self.logger.info(f"CTP动态发现 {len(self.futures_contracts)} 个期货合约")
+                return self.futures_contracts
+            else:
+                self.logger.error("CTP合约查询超时，无法获取合约列表")
+                raise TimeoutError("CTP合约查询超时：请检查网络连接和CTP配置")
+
+        except Exception as e:
+            self.logger.error(f"CTP合约发现失败: {e}")
+            self.logger.error("动态合约发现失败，请检查CTP配置和网络连接")
+            raise RuntimeError(f"CTP合约发现失败: {e}")
+        finally:
+            if self.ctp_api:
+                try:
+                    self.ctp_api.release()
+                except:
+                    pass
+
+
 
     def get_contracts_by_exchange(self, exchange: str) -> List[str]:
         """按交易所获取合约"""
-        from vnpy.trader.object import EXCHANGE_SYM
-        return [symbol for symbol, exch in EXCHANGE_SYM.items() if exch == exchange]
-
-    def get_sample_contracts(self, count: int = 10) -> List[str]:
-        """获取样本合约用于测试"""
         if not self.futures_contracts:
             self.get_all_futures_contracts()
-        return self.futures_contracts[:count]
+
+        # 简单的交易所分类逻辑
+        exchange_contracts = []
+        for contract in self.futures_contracts:
+            if exchange == "CFFEX" and contract.startswith(('IC', 'IF', 'IH', 'IM', 'T', 'TF', 'TS', 'TL')):
+                exchange_contracts.append(contract)
+            elif exchange == "SHFE" and contract.startswith(('rb', 'au', 'ag', 'fu', 'ru', 'cu', 'al', 'zn', 'ni', 'sn', 'pb', 'hc', 'ss', 'bc', 'sp')):
+                exchange_contracts.append(contract)
+            elif exchange == "DCE" and contract.startswith(('p', 'i', 'jm', 'm', 'y', 'eb', 'v', 'pp', 'c', 'cs', 'a', 'b', 'jd', 'l', 'pg')):
+                exchange_contracts.append(contract)
+            elif exchange == "CZCE" and any(contract.startswith(prefix) for prefix in ['MA', 'OI', 'TA', 'SH', 'FG', 'SA', 'UR', 'SR', 'CF', 'CY', 'AP', 'CJ', 'PK', 'RM', 'ZC']):
+                exchange_contracts.append(contract)
+            elif exchange == "INE" and contract.startswith(('sc', 'lu', 'nr', 'bc', 'ec')):
+                exchange_contracts.append(contract)
+
+        return exchange_contracts
 
 
 class MemoryMonitor:
@@ -250,16 +333,18 @@ class MarketDataRecorder:
 
     def __init__(self, storage_path: str = "/data/market_data",
                  host: str = "localhost", port: int = 8848,
-                 username: str = "admin", password: str = "123456"):
+                 username: str = "admin", password: str = "123456",
+                 ctp_setting: Optional[Dict] = None):
         self.session = ddb.session()
         self.session.connect(host, port, username, password)
         self.storage_path = storage_path
         self.recording = False
         self.paused = False
+        self.ctp_setting = ctp_setting  # Store CTP settings
 
         # 组件初始化 - 8GB RAM优化
         self.memory_monitor = MemoryMonitor(threshold_percent=50.0, critical_percent=65.0, max_ram_gb=8.0)
-        self.contract_discovery = ContractDiscovery()
+        self.contract_discovery = ContractDiscovery(ctp_setting)
         self.logger = logger
 
         # 录制配置 - 针对8GB RAM和1700+合约优化
@@ -577,11 +662,17 @@ class MarketDataRecorder:
 
         # 确定要录制的合约
         if full_market:
-            symbols = self.contract_discovery.get_all_futures_contracts()
-            self.logger.info(f"全市场录制模式，发现 {len(symbols)} 个期货合约")
+            try:
+                symbols = self.contract_discovery.get_all_futures_contracts()
+                self.logger.info(f"全市场录制模式，发现 {len(symbols)} 个期货合约")
+            except Exception as e:
+                self.logger.error(f"获取合约列表失败: {e}")
+                self.logger.error("无法启动录制，请检查CTP配置")
+                return
         elif symbols is None:
-            symbols = self.contract_discovery.get_sample_contracts(10)
-            self.logger.info(f"使用样本合约进行录制: {len(symbols)} 个")
+            self.logger.error("未提供合约列表且未启用全市场模式")
+            self.logger.error("请提供合约列表或启用全市场模式")
+            return
 
         if not symbols:
             self.logger.error("没有找到可录制的合约")
@@ -626,7 +717,10 @@ class MarketDataRecorder:
                 record_stats({len(symbols)}, 0, {psutil.virtual_memory().percent})
             """)
 
-            self.logger.info("录制已启动")
+            # 连接CTP并开始接收真实数据
+            self.inject_ctp_data(symbols)
+
+            self.logger.info("录制已启动，正在接收真实CTP数据")
 
         except Exception as e:
             self.logger.error(f"启动录制失败: {e}")
@@ -646,6 +740,14 @@ class MarketDataRecorder:
 
         # 停止内存监控
         self.memory_monitor.stop_monitoring()
+
+        # 断开CTP连接
+        if hasattr(self, 'md_api') and self.md_api:
+            try:
+                self.md_api.release()
+                self.logger.info("CTP行情连接已断开")
+            except:
+                pass
 
         try:
             # 取消订阅
@@ -698,141 +800,165 @@ class MarketDataRecorder:
                 self.logger.error(f"恢复录制失败: {e}")
 
     def inject_ctp_data(self, symbols: List[str]):
-        """注入CTP实时数据 - 连接到实际CTP数据源"""
+        """连接CTP实时数据源并等待数据流"""
         self.logger.info(f"开始连接CTP数据源，订阅 {len(symbols)} 个合约")
 
-        # 这里应该集成实际的CTP连接逻辑
-        # 参考test_live_simulate.py中的CTP连接方式
         try:
-            # 模拟CTP数据注入
-            from vnpy.trader.object import EXCHANGE_SYM
+            # 导入CTP相关模块
+            from vnpy_ctp.api import MdApi
 
-            for symbol in symbols:
-                if symbol in EXCHANGE_SYM:
-                    exchange = EXCHANGE_SYM[symbol]
-                    self.logger.info(f"订阅合约: {symbol} ({exchange})")
-                    # 这里应该调用实际的CTP订阅方法
-                    # gateway.subscribe(symbol)
+            class MarketDataApi(MdApi):
+                def __init__(self, recorder):
+                    super().__init__()
+                    self.recorder = recorder
+                    self.login_status = False
+                    self.subscribed_symbols = set()
+                    self.data_received = False
 
-            self.logger.info("CTP数据源连接完成")
+                def onFrontConnected(self):
+                    self.recorder.logger.info("CTP行情前置连接成功")
+                    self.login()
+
+                def onRspUserLogin(self, data, error, reqid, last):
+                    if error["ErrorID"] == 0:
+                        self.recorder.logger.info("CTP行情登录成功")
+                        self.login_status = True
+                        self.subscribe_symbols()
+                    else:
+                        self.recorder.logger.error(f"CTP行情登录失败: {error}")
+
+                def onRspSubMarketData(self, data, error, reqid, last):
+                    if error["ErrorID"] == 0:
+                        symbol = data["InstrumentID"]
+                        self.subscribed_symbols.add(symbol)
+                        self.recorder.logger.info(f"订阅成功: {symbol}")
+                    else:
+                        self.recorder.logger.error(f"订阅失败: {error}")
+
+                def onRtnDepthMarketData(self, data):
+                    """接收实时行情数据"""
+                    self.data_received = True
+                    try:
+                        # 将CTP行情数据写入DolphinDB流表
+                        symbol = data["InstrumentID"]
+                        price = data["LastPrice"]
+                        volume = data["Volume"]
+                        bid1 = data["BidPrice1"] if data["BidPrice1"] != float('inf') else price - 0.01
+                        ask1 = data["AskPrice1"] if data["AskPrice1"] != float('inf') else price + 0.01
+                        bid_vol1 = data["BidVolume1"]
+                        ask_vol1 = data["AskVolume1"]
+                        turnover = data["Turnover"]
+                        open_interest = data["OpenInterest"]
+
+                        # 确定交易所
+                        exchange = self._get_exchange_by_symbol(symbol)
+
+                        # 插入到流表
+                        insert_cmd = f"""
+                            tableInsert(live_tick_stream,
+                                [now()],
+                                [`{symbol}],
+                                [{price}],
+                                [{volume}],
+                                [{bid1}],
+                                [{ask1}],
+                                [{bid_vol1}],
+                                [{ask_vol1}],
+                                [{turnover}],
+                                [{open_interest}],
+                                [`{exchange}],
+                                [now()]
+                            )
+                        """
+                        self.recorder.session.run(insert_cmd)
+
+                    except Exception as e:
+                        self.recorder.logger.error(f"处理行情数据失败: {e}")
+
+                def _get_exchange_by_symbol(self, symbol):
+                    """根据合约代码确定交易所"""
+                    if symbol.startswith(('IC', 'IF', 'IH', 'IM', 'T', 'TF', 'TS', 'TL')):
+                        return 'CFFEX'
+                    elif symbol.startswith(('rb', 'au', 'ag', 'fu', 'ru', 'cu', 'al', 'zn', 'ni', 'sn', 'pb', 'hc', 'ss', 'bc', 'sp')):
+                        return 'SHFE'
+                    elif symbol.startswith(('p', 'i', 'jm', 'm', 'y', 'eb', 'v', 'pp', 'c', 'cs', 'a', 'b', 'jd', 'l', 'pg')):
+                        return 'DCE'
+                    elif any(symbol.startswith(prefix) for prefix in ['MA', 'OI', 'TA', 'SH', 'FG', 'SA', 'UR', 'SR', 'CF', 'CY', 'AP', 'CJ', 'PK', 'RM', 'ZC']):
+                        return 'CZCE'
+                    elif symbol.startswith(('sc', 'lu', 'nr', 'bc', 'ec')):
+                        return 'INE'
+                    else:
+                        return 'UNKNOWN'
+
+                def login(self):
+                    req = {
+                        "BrokerID": self.recorder.ctp_setting["经纪商代码"],
+                        "UserID": self.recorder.ctp_setting["用户名"],
+                        "Password": self.recorder.ctp_setting["密码"]
+                    }
+                    self.reqUserLogin(req, 1)
+
+                def subscribe_symbols(self):
+                    """订阅合约行情"""
+                    # 分批订阅，避免一次订阅太多
+                    batch_size = 50
+                    for i in range(0, len(symbols), batch_size):
+                        batch = symbols[i:i+batch_size]
+                        self.recorder.logger.info(f"订阅第 {i//batch_size + 1} 批合约: {len(batch)} 个")
+                        # CTP API需要逐个订阅
+                        for symbol in batch:
+                            try:
+                                self.subscribeMarketData(symbol)
+                            except Exception as e:
+                                self.recorder.logger.error(f"订阅合约 {symbol} 失败: {e}")
+                        time.sleep(1)  # 避免订阅过快
+
+            # 创建行情API
+            self.md_api = MarketDataApi(self)
+            self.md_api.createFtdcMdApi("")
+            self.md_api.registerFront(self.ctp_setting["行情服务器"])
+            self.md_api.init()
+
+            # 等待连接和订阅完成
+            self.logger.info("等待CTP连接和订阅完成...")
+            timeout = 60  # 60秒超时
+            start_time = time.time()
+
+            while not self.md_api.login_status and (time.time() - start_time) < timeout:
+                time.sleep(0.5)
+
+            if not self.md_api.login_status:
+                raise TimeoutError("CTP行情登录超时")
+
+            # 等待订阅完成
+            self.logger.info("等待合约订阅完成...")
+            subscription_timeout = 30
+            start_time = time.time()
+
+            while len(self.md_api.subscribed_symbols) < min(len(symbols), 100) and (time.time() - start_time) < subscription_timeout:
+                time.sleep(1)
+                self.logger.info(f"已订阅 {len(self.md_api.subscribed_symbols)} 个合约")
+
+            # 等待数据开始流入
+            self.logger.info("等待行情数据开始流入...")
+            data_timeout = 30
+            start_time = time.time()
+
+            while not self.md_api.data_received and (time.time() - start_time) < data_timeout:
+                time.sleep(1)
+
+            if self.md_api.data_received:
+                self.logger.info("✅ CTP行情数据开始流入")
+            else:
+                self.logger.warning("⚠️ 等待行情数据超时，但连接已建立")
+
+            self.logger.info(f"CTP数据源连接完成，已订阅 {len(self.md_api.subscribed_symbols)} 个合约")
 
         except Exception as e:
             self.logger.error(f"CTP数据源连接失败: {e}")
             raise
     
-    def inject_test_data(self, symbol_count: int = 100, duration_minutes: int = 60, tick_rate: int = 10):
-        """注入测试数据 - 增强版本"""
-        self.logger.info(f"开始注入测试数据: {symbol_count}品种, {duration_minutes}分钟, {tick_rate}tick/s")
 
-        # 使用真实的期货合约名称
-        all_symbols = self.contract_discovery.get_all_futures_contracts()
-        if len(all_symbols) >= symbol_count:
-            symbols = all_symbols[:symbol_count]
-        else:
-            # 如果真实合约不够，补充测试合约
-            symbols = all_symbols + [f"TEST{i:03d}" for i in range(symbol_count - len(all_symbols))]
-
-        start_time = datetime.now()
-        total_ticks = 0
-        batch_data = []
-
-        self.logger.info(f"使用合约: {', '.join(symbols[:5])}{'...' if len(symbols) > 5 else ''}")
-
-        try:
-            for minute in range(duration_minutes):
-                for second in range(60):
-                    for tick in range(tick_rate):
-                        if not self.recording or self.paused:
-                            break
-
-                        # 轮询选择品种
-                        symbol = symbols[total_ticks % len(symbols)]
-
-                        # 生成模拟数据
-                        timestamp = start_time + timedelta(minutes=minute, seconds=second,
-                                                         milliseconds=tick * (1000 // tick_rate))
-                        price = 100 + (total_ticks % 100) * 0.01
-                        volume = 100 + (total_ticks % 50)
-
-                        # 获取交易所信息
-                        try:
-                            from vnpy.trader.object import EXCHANGE_SYM
-                            exchange = EXCHANGE_SYM.get(symbol, "TEST")
-                        except ImportError:
-                            # 简单的交易所映射
-                            if symbol.startswith(('IC', 'IF', 'IH', 'IM', 'T', 'TF', 'TS', 'TL')):
-                                exchange = "CFFEX"
-                            elif symbol.startswith(('rb', 'au', 'ag', 'fu', 'ru', 'cu', 'al', 'zn', 'ni', 'sn', 'pb', 'hc', 'ss', 'bc', 'sp')):
-                                exchange = "SHFE"
-                            elif symbol.startswith(('p', 'i', 'jm', 'm', 'y', 'eb', 'v', 'pp', 'c', 'cs', 'a', 'b', 'jd', 'l', 'pg')):
-                                exchange = "DCE"
-                            elif symbol.startswith(('MA', 'OI', 'TA', 'SH', 'FG', 'SA', 'UR', 'SR', 'CF', 'CY', 'AP', 'CJ', 'PK', 'RM', 'ZC')):
-                                exchange = "CZCE"
-                            elif symbol.startswith(('sc', 'lu', 'nr', 'bc')):
-                                exchange = "INE"
-                            else:
-                                exchange = "TEST"
-
-                        # 准备数据 - 使用正确的时间戳格式
-                        timestamp_str = f"timestamp('{timestamp.strftime('%Y.%m.%dT%H:%M:%S.%f')[:-3]}')"
-                        update_time_str = f"timestamp('{datetime.now().strftime('%Y.%m.%dT%H:%M:%S.%f')[:-3]}')"
-
-                        # 直接插入 - 使用单行格式避免语法问题
-                        try:
-                            insert_sql = f"insert into live_tick_stream values({timestamp_str}, `{symbol}, {price}, {volume}, {price - 0.01}, {price + 0.01}, {volume//2}, {volume//2}, {price * volume}, {1000 + total_ticks % 100}, `{exchange}, {update_time_str})"
-                            self.session.run(insert_sql)
-                        except Exception as e:
-                            if total_ticks < 5:  # Only log first few errors
-                                self.logger.error(f"插入数据失败: {e}")
-                                self.logger.error(f"SQL: {insert_sql}")
-
-                        # 保留批量逻辑用于统计
-                        batch_data.append("dummy")
-
-                        total_ticks += 1
-
-                        # 批量处理统计
-                        if len(batch_data) >= self.batch_size:
-                            self.logger.debug(f"处理批次数据，大小: {len(batch_data)}")
-                            batch_data = []
-
-                        # 控制速率
-                        if tick_rate > 100:
-                            time.sleep(0.001)
-
-                    if not self.recording or self.paused:
-                        break
-
-                if not self.recording or self.paused:
-                    break
-
-                # 每分钟报告进度和内存状态
-                if minute % 5 == 0:
-                    memory_info = self.memory_monitor.get_memory_info()
-                    self.logger.info(f"已注入 {minute} 分钟数据, 总计 {total_ticks} ticks, "
-                                   f"内存使用: {memory_info['percent']:.1f}%")
-
-                    # 定期清理
-                    if time.time() - self.last_cleanup_time > self.cleanup_interval:
-                        self.session.run("cleanup_stream_tables(memory_config, false)")
-                        self.last_cleanup_time = time.time()
-
-            # 处理剩余数据统计
-            if batch_data:
-                self.logger.info(f"处理剩余 {len(batch_data)} 条数据统计")
-
-            # 检查流表大小
-            try:
-                stream_size = self.session.run("size(live_tick_stream)")
-                self.logger.info(f"流表当前大小: {stream_size}")
-            except Exception as e:
-                self.logger.error(f"检查流表大小失败: {e}")
-
-            self.logger.info(f"测试数据注入完成, 总计 {total_ticks} ticks")
-
-        except Exception as e:
-            self.logger.error(f"测试数据注入失败: {e}")
-            raise
 
     def _insert_batch_data(self, batch_data: List[str]):
         """批量插入数据"""
@@ -963,7 +1089,7 @@ class MarketDataRecorder:
             return {'error': str(e)}
 
 
-def run_performance_test(test_type: str = "sample", duration_minutes: int = 10):
+def run_performance_test(test_type: str = "sample", duration_minutes: int = 10, ctp_setting: Optional[Dict] = None):
     """运行性能测试"""
     logger.info(f"开始性能测试: {test_type}, 持续时间: {duration_minutes}分钟")
 
@@ -975,35 +1101,32 @@ def run_performance_test(test_type: str = "sample", duration_minutes: int = 10):
     except:
         logger.warning("清理脚本执行失败，继续测试")
 
-    recorder = MarketDataRecorder()
+    recorder = MarketDataRecorder(ctp_setting=ctp_setting)
 
     try:
         if test_type == "sample":
-            # 样本测试 - 10个合约
+            # 样本测试 - 使用前10个合约
             logger.info("执行样本测试...")
-            recorder.start_recording(full_market=False)
-            recorder.inject_test_data(symbol_count=10, duration_minutes=duration_minutes, tick_rate=5)
+            all_symbols = recorder.contract_discovery.get_all_futures_contracts()
+            test_symbols = all_symbols[:10] if len(all_symbols) >= 10 else all_symbols
+            recorder.start_recording(symbols=test_symbols)
 
         elif test_type == "medium":
-            # 中等规模测试 - 50个合约
+            # 中等规模测试 - 使用前50个合约
             logger.info("执行中等规模测试...")
-            symbols = recorder.contract_discovery.get_sample_contracts(50)
-            recorder.start_recording(symbols)
-            recorder.inject_test_data(symbol_count=50, duration_minutes=duration_minutes, tick_rate=10)
+            all_symbols = recorder.contract_discovery.get_all_futures_contracts()
+            test_symbols = all_symbols[:50] if len(all_symbols) >= 50 else all_symbols
+            recorder.start_recording(symbols=test_symbols)
 
         elif test_type == "full":
             # 全市场测试
             logger.info("执行全市场测试...")
             recorder.start_recording(full_market=True)
-            all_symbols = recorder.contract_discovery.get_all_futures_contracts()
-            recorder.inject_test_data(symbol_count=len(all_symbols), duration_minutes=duration_minutes, tick_rate=15)
 
         elif test_type == "stress":
-            # 压力测试 - 高频数据
+            # 压力测试 - 全市场高频
             logger.info("执行压力测试...")
             recorder.start_recording(full_market=True)
-            all_symbols = recorder.contract_discovery.get_all_futures_contracts()
-            recorder.inject_test_data(symbol_count=len(all_symbols), duration_minutes=duration_minutes, tick_rate=50)
 
         # 等待处理完成
         logger.info("等待数据处理完成...")
@@ -1041,8 +1164,25 @@ if __name__ == "__main__":
                        default="sample", help="测试类型")
     parser.add_argument("--duration", type=int, default=5, help="测试持续时间(分钟)")
     parser.add_argument("--cleanup", action="store_true", help="测试前清理DolphinDB")
+    parser.add_argument("--ctp-config", type=str, help="CTP配置文件路径(JSON格式)")
+    parser.add_argument("--use-dynamic-discovery", action="store_true",
+                       help="使用CTP动态合约发现(需要提供CTP配置)")
 
     args = parser.parse_args()
+
+    # 加载CTP配置
+    ctp_setting = None
+    if args.ctp_config:
+        try:
+            import json
+            with open(args.ctp_config, 'r', encoding='utf-8') as f:
+                ctp_setting = json.load(f)
+            logger.info(f"已加载CTP配置: {args.ctp_config}")
+        except Exception as e:
+            logger.error(f"加载CTP配置失败: {e}")
+            logger.info("将使用备用合约列表")
+    elif args.use_dynamic_discovery:
+        logger.warning("启用动态发现但未提供CTP配置，将使用备用合约列表")
 
     if args.cleanup:
         logger.info("执行清理...")
@@ -1052,4 +1192,4 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"清理失败: {e}")
 
-    run_performance_test(args.test_type, args.duration)
+    run_performance_test(args.test_type, args.duration, ctp_setting)

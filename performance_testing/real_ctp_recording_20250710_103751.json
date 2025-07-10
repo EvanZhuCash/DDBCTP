@@ -1,0 +1,32 @@
+{
+  "recording_session": {
+    "start_time": null,
+    "end_time": "2025-07-10T10:37:51.798043",
+    "duration_minutes": 0
+  },
+  "data_statistics": {
+    "total_ticks": 0,
+    "total_symbols": 0,
+    "start_time": null,
+    "data_size_mb": 0.0,
+    "symbols_recording": [],
+    "memory_cleanups": 0,
+    "emergency_stops": 0,
+    "stored_ticks": 0,
+    "memory_trend": {
+      "trend": "unknown",
+      "rate": 0
+    }
+  },
+  "memory_info": {
+    "total_gb": 31.793426513671875,
+    "available_gb": 16.649032592773438,
+    "used_gb": 15.144393920898438,
+    "percent": 47.6,
+    "history_count": 0
+  },
+  "storage_info": {
+    "tick_data_count": 0,
+    "database_path": "dfs://market_data_recording"
+  }
+}
