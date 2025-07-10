@@ -1,0 +1,244 @@
+// =============================================================================
+// UNIFIED SIGNAL COLLECTION SYSTEM
+// =============================================================================
+// Purpose: Collect signals from all 4 strategies and create unified signal stream
+// This runs after strategies are initialized and before exchange starts
+// =============================================================================
+
+print("🎯 UNIFIED SIGNAL COLLECTION SYSTEM - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+
+def cleanupSignalCollection() {
+    // Unsubscribe from strategy signals
+    try { unsubscribeTable(tableName="strat1Signals", actionName="collect_strat1") } catch(ex) {}
+    try { unsubscribeTable(tableName="strat2Signals", actionName="collect_strat2") } catch(ex) {}
+    try { unsubscribeTable(tableName="strat3Signals", actionName="collect_strat3") } catch(ex) {}
+    try { unsubscribeTable(tableName="strat4Signals", actionName="collect_strat4") } catch(ex) {}
+    
+    // Drop unified signals table
+    try { undef("unifiedSignals", SHARED) } catch(ex) {}
+    try { undef("signalCollectionLog", SHARED) } catch(ex) {}
+    
+    print("Signal collection cleanup completed")
+}
+
+cleanupSignalCollection()
+
+// =============================================================================
+// SIGNAL COLLECTION TABLES
+// =============================================================================
+
+print("Creating unified signal collection tables...")
+
+// Unified signals stream for exchange
+share streamTable(100000:0, `time`symbol`signal`position`strategy_id,
+                 [TIMESTAMP, SYMBOL, STRING, INT, INT]) as unifiedSignals
+
+// Signal collection monitoring log
+share streamTable(10000:0, `time`strategy_id`signals_collected`total_signals,
+                 [TIMESTAMP, INT, INT, INT]) as signalCollectionLog
+
+print("Signal collection tables created")
+
+// =============================================================================
+// SIGNAL COLLECTION ENGINE
+// =============================================================================
+
+// Collect signals from all strategies
+def collectSignals(mutable signalBatch, strategyId) {
+    if (size(signalBatch) == 0) return
+    
+    // Forward signals to unified stream
+    unifiedSignals.append!(signalBatch)
+    
+    // Log collection
+    logEntry = table([now()] as time,
+                    [strategyId] as strategy_id,
+                    [size(signalBatch)] as signals_collected,
+                    [exec count(*) from unifiedSignals] as total_signals)
+    signalCollectionLog.append!(logEntry)
+    
+    print("📊 Collected " + string(size(signalBatch)) + " signals from Strategy " + string(strategyId))
+}
+
+// =============================================================================
+// STRATEGY SIGNAL SUBSCRIPTION
+// =============================================================================
+
+def subscribeToStrategySignals() {
+    print("🔗 Subscribing to all strategy signals...")
+    
+    // Try to subscribe to each strategy with retry logic
+    strategies = [1, 2, 3, 4]
+    subscribed = [false, false, false, false]
+    maxRetries = 5
+    
+    for (retryCount in 0..maxRetries) {
+        for (i in 0..3) {
+            stratId = strategies[i]
+            if (!subscribed[i]) {
+                try {
+                    tableName = "strat" + string(stratId) + "Signals"
+                    actionName = "collect_strat" + string(stratId)
+                    
+                    // Check if table exists and has structure
+                    recordCount = exec count(*) from objByName(tableName)
+                    
+                    subscribeTable(tableName=tableName, actionName=actionName,
+                                  handler=collectSignals{stratId}, msgAsTable=true)
+                    
+                    print("✅ Subscribed to " + tableName + " (" + string(recordCount) + " existing signals)")
+                    subscribed[i] = true
+                    
+                } catch(ex) {
+                    if (retryCount == maxRetries) {
+                        print("⚠️ Could not subscribe to strat" + string(stratId) + "Signals: " + ex)
+                    }
+                }
+            }
+        }
+        
+        // Check if all strategies are subscribed
+        allSubscribed = true
+        for (s in subscribed) {
+            if (!s) allSubscribed = false
+        }
+        
+        if (allSubscribed) {
+            print("✅ Successfully subscribed to all strategy signals")
+            return true
+        }
+        
+        if (retryCount < maxRetries) {
+            print("⏳ Retry " + string(retryCount + 1) + "/" + string(maxRetries + 1) + " - waiting for strategy tables...")
+            sleep(1000)  // Wait 1 second before retry
+        }
+    }
+    
+    print("⚠️ Partial subscription - some strategy signals may not be collected")
+    return false
+}
+
+// =============================================================================
+// COLLECT EXISTING SIGNALS
+// =============================================================================
+
+def collectExistingSignals() {
+    print("📊 Collecting existing signals from all strategies...")
+    
+    totalCollected = 0
+    
+    // Collect from Strategy 1
+    try {
+        strat1Count = exec count(*) from strat1Signals
+        if (strat1Count > 0) {
+            strat1Data = select * from strat1Signals order by time
+            collectSignals(strat1Data, 1)
+            totalCollected += strat1Count
+        }
+    } catch(ex) {
+        print("⚠️ Could not collect from strat1Signals: " + ex)
+    }
+    
+    // Collect from Strategy 2
+    try {
+        strat2Count = exec count(*) from strat2Signals
+        if (strat2Count > 0) {
+            strat2Data = select * from strat2Signals order by time
+            collectSignals(strat2Data, 2)
+            totalCollected += strat2Count
+        }
+    } catch(ex) {
+        print("⚠️ Could not collect from strat2Signals: " + ex)
+    }
+    
+    // Collect from Strategy 3
+    try {
+        strat3Count = exec count(*) from strat3Signals
+        if (strat3Count > 0) {
+            strat3Data = select * from strat3Signals order by time
+            collectSignals(strat3Data, 3)
+            totalCollected += strat3Count
+        }
+    } catch(ex) {
+        print("⚠️ Could not collect from strat3Signals: " + ex)
+    }
+    
+    // Collect from Strategy 4
+    try {
+        strat4Count = exec count(*) from strat4Signals
+        if (strat4Count > 0) {
+            strat4Data = select * from strat4Signals order by time
+            collectSignals(strat4Data, 4)
+            totalCollected += strat4Count
+        }
+    } catch(ex) {
+        print("⚠️ Could not collect from strat4Signals: " + ex)
+    }
+    
+    print("✅ Collected " + string(totalCollected) + " existing signals")
+    return totalCollected
+}
+
+// =============================================================================
+// START SIGNAL COLLECTION
+// =============================================================================
+
+// First collect any existing signals
+existingSignals = collectExistingSignals()
+
+// Then subscribe for future signals
+subscriptionSuccess = subscribeToStrategySignals()
+
+// =============================================================================
+// MONITORING AND STATUS
+// =============================================================================
+
+def showSignalCollectionStatus() {
+    print("\n🎯 UNIFIED SIGNAL COLLECTION STATUS")
+    print("==========================================")
+    
+    totalSignals = exec count(*) from unifiedSignals
+    print("📊 Total unified signals: " + string(totalSignals))
+    
+    if (totalSignals > 0) {
+        strategyBreakdown = select strategy_id, count(*) as signals from unifiedSignals group by strategy_id
+        print("📊 Strategy breakdown:")
+        print(strategyBreakdown)
+        
+        signalBreakdown = select signal, count(*) as count from unifiedSignals group by signal
+        print("📊 Signal type breakdown:")
+        print(signalBreakdown)
+        
+        // Show sample of latest signals
+        print("\n📈 Latest signals sample:")
+        latestSignals = select top 5 * from unifiedSignals order by time desc
+        print(latestSignals)
+    }
+    
+    if (exec count(*) from signalCollectionLog > 0) {
+        print("\n📈 Recent collection activity:")
+        recentActivity = select top 5 * from signalCollectionLog order by time desc
+        print(recentActivity)
+    }
+    
+    print("==========================================")
+}
+
+showSignalCollectionStatus()
+
+print("\n✅ UNIFIED SIGNAL COLLECTION SYSTEM READY")
+print("🏗️ Architecture:")
+print("  📊 Input: strat1Signals, strat2Signals, strat3Signals, strat4Signals")
+print("  📡 Output: unifiedSignals (for exchange)")
+print("  🎯 Purpose: Aggregate all strategy signals for exchange processing")
+print("  📈 Real-time: Subscribes to new signals from all strategies")
+
+print("\n📋 Usage:")
+print("  🔄 EXCHANGE: Subscribe to unifiedSignals for trade execution")
+print("  📊 MONITORING: Query unifiedSignals for signal analytics")
+
+print("\n🚀 Signal collection engine operational!")

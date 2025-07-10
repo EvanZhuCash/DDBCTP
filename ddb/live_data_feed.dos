@@ -1,0 +1,165 @@
+// LIVE DATA FEED SYSTEM
+// Purpose: Provides live market data feed for live trading mode
+// Used instead of dominant_contract_stream.dos in live trading
+
+print("📡 LIVE DATA FEED SYSTEM - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+
+def cleanupLiveDataFeed() {
+    try { undef(`liveMarketData, SHARED) } catch(ex) {}
+    try { undef(`liveDataStatus, SHARED) } catch(ex) {}
+    
+    print("Live data feed cleanup completed")
+}
+
+cleanupLiveDataFeed()
+
+// =============================================================================
+// LIVE DATA TABLES
+// =============================================================================
+
+print("Creating live market data tables...")
+
+// Live market data stream (replaces dominantContractStream in live mode)
+share streamTable(50000:0, `time`symbol`open`high`low`close`volume,
+                 [TIMESTAMP, SYMBOL, DOUBLE, DOUBLE, DOUBLE, DOUBLE, INT]) as liveMarketData
+
+// Live data status monitoring
+share streamTable(1000:0, `time`feed_status`records_received`last_update,
+                 [TIMESTAMP, STRING, INT, TIMESTAMP]) as liveDataStatus
+
+print("Live data tables created")
+
+// =============================================================================
+// LIVE DATA CONNECTION (Placeholder for real implementation)
+// =============================================================================
+
+print("📡 Connecting to live market data sources...")
+
+// NOTE: In real implementation, this would connect to:
+// - CTP for Chinese futures
+// - Interactive Brokers for global markets  
+// - Crypto exchanges for digital assets
+// - etc.
+
+// For demonstration, simulate live data generation
+def simulateLiveData() {
+    print("⚠️ SIMULATION MODE: Generating sample live data")
+    print("   In production, replace with real data feed connections")
+    
+    // Simulate live market data (replace with real feed in production)
+    currentTime = now()
+    
+    // Sample live data for Y and M contracts
+    sampleData = table([currentTime, currentTime + 60000, currentTime + 120000] as time,
+                      ["Y2405", "M2405", "Y2405"] as symbol,
+                      [4100.0, 3950.0, 4105.0] as open,
+                      [4120.0, 3965.0, 4115.0] as high,
+                      [4095.0, 3945.0, 4100.0] as low,
+                      [4110.0, 3960.0, 4108.0] as close,
+                      [1500, 1200, 800] as volume)
+    
+    liveMarketData.append!(sampleData)
+    
+    // Update status
+    statusUpdate = table([currentTime] as time,
+                        ["CONNECTED"] as feed_status,
+                        [size(sampleData)] as records_received,
+                        [currentTime] as last_update)
+    
+    liveDataStatus.append!(statusUpdate)
+    
+    print("✅ Live data simulation started - " + string(size(sampleData)) + " records")
+}
+
+// =============================================================================
+// REAL LIVE DATA CONNECTIONS (Template)
+// =============================================================================
+
+// Template for real CTP connection
+def connectToCTP() {
+    print("📡 Connecting to CTP for Chinese futures...")
+    // TODO: Implement real CTP connection
+    // This would use vnpy_ctp or similar connector
+    print("⚠️ CTP connection not implemented - use simulation mode")
+    return false
+}
+
+// Template for real IB connection  
+def connectToIB() {
+    print("📡 Connecting to Interactive Brokers...")
+    // TODO: Implement real IB connection
+    // This would use ib-insync or similar connector
+    print("⚠️ IB connection not implemented - use simulation mode")
+    return false
+}
+
+// Template for crypto exchange connection
+def connectToCrypto() {
+    print("📡 Connecting to crypto exchanges...")
+    // TODO: Implement crypto exchange connections
+    print("⚠️ Crypto connections not implemented - use simulation mode")
+    return false
+}
+
+// =============================================================================
+// START LIVE DATA FEED
+// =============================================================================
+
+print("🚀 Starting live data feed...")
+
+// Try to connect to real data sources
+ctpConnected = connectToCTP()
+ibConnected = connectToIB()
+cryptoConnected = connectToCrypto()
+
+if (!ctpConnected and !ibConnected and !cryptoConnected) {
+    print("⚠️ No real data sources connected - using simulation mode")
+    simulateLiveData()
+} else {
+    print("✅ Live data sources connected")
+}
+
+// =============================================================================
+// MONITORING
+// =============================================================================
+
+def showLiveDataStatus() {
+    print("\n📡 LIVE DATA FEED STATUS")
+    print("==========================================")
+    
+    dataCount = exec count(*) from liveMarketData
+    print("📊 Live data records: " + string(dataCount))
+    
+    if (dataCount > 0) {
+        latestData = select top 5 * from liveMarketData order by time desc
+        print("📈 Latest data:")
+        print(latestData)
+    }
+    
+    if (exec count(*) from liveDataStatus > 0) {
+        currentStatus = select top 1 * from liveDataStatus order by time desc
+        print("\n🔄 Current status:")
+        print(currentStatus)
+    }
+    
+    print("==========================================")
+}
+
+showLiveDataStatus()
+
+print("\n✅ LIVE DATA FEED READY")
+print("📡 Features:")
+print("  📊 Live market data stream: liveMarketData")
+print("  🔄 Status monitoring: liveDataStatus")
+print("  📈 Ready for unified distribution")
+
+print("\n📋 Usage:")
+print("  🔄 LIVE TRADING: Use this instead of dominant_contract_stream.dos")
+print("  📊 STRATEGIES: Will receive data via unified distribution")
+print("  📡 REAL FEEDS: Replace simulation with real CTP/IB/Crypto connections")
+
+print("\n🚀 Live data feed operational!")
