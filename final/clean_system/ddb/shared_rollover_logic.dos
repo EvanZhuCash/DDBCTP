@@ -1,0 +1,276 @@
+// =============================================================================
+// SHARED ROLLOVER LOGIC FOR BACKTEST AND LIVE TRADING
+// =============================================================================
+// Purpose: Provide consistent rollover logic for both backtest and live trading
+// Features:
+// - Calendar-based rollover rules shared between systems
+// - Volume-based fallback mechanism
+// - Contract availability checks without look-ahead bias
+// - Support for Y and M futures with configurable parameters
+// =============================================================================
+
+print("🔄 SHARED ROLLOVER LOGIC - Loading rollover determination functions...")
+
+// =============================================================================
+// CONFIGURATION PARAMETERS
+// =============================================================================
+
+// Rollover configuration (same as dominant_contract_stream.dos)
+@ROLLOVER_DAYS_BEFORE_EXPIRY_Y = 30
+@ROLLOVER_DAYS_BEFORE_EXPIRY_M = 30
+@CONTRACT_LISTING_MONTHS_AHEAD = 6
+@MIN_TRADING_DAYS_REQUIRED = 5
+@VALID_CONTRACT_MONTHS = 1 5 9
+
+print("=== SHARED ROLLOVER CONFIGURATION ===")
+print("Y Rollover Days: " + string(@ROLLOVER_DAYS_BEFORE_EXPIRY_Y))
+print("M Rollover Days: " + string(@ROLLOVER_DAYS_BEFORE_EXPIRY_M))
+print("Valid Contract Months: 1, 5, 9")
+
+// =============================================================================
+// SHARED ROLLOVER FUNCTIONS
+// =============================================================================
+
+// Calendar-based dominant contract selection (from dominant_contract_stream.dos)
+def getDominantContractCalendar(currentDate, availableContracts, rolloverDays, listingMonthsAhead, minTradingDays) {
+    knownContracts = array(STRING, 0)
+
+    // Filter contracts that are available for trading (no look-forward bias)
+    for (contract in availableContracts) {
+        if (strlen(contract) >= 5) {
+            contractYearStr = substr(contract, 1, 2)
+            contractMonthStr = substr(contract, 3, 2)
+
+            contractYear = 2000 + int(contractYearStr)
+            contractMonth = int(contractMonthStr)
+
+            // Only consider valid contract months (1,5,9)
+            if (contractMonth == 1 or contractMonth == 5 or contractMonth == 9) {
+                monthStr = iif(contractMonth < 10, "0" + string(contractMonth), string(contractMonth))
+                dateStr = string(contractYear) + "." + monthStr + ".01"
+                expiryDate = date(dateStr)
+
+                listingDate = temporalAdd(expiryDate, -listingMonthsAhead, `M)
+                minTradingDate = temporalAdd(listingDate, minTradingDays, `d)
+
+                if (currentDate >= minTradingDate) {
+                    knownContracts.append!(contract)
+                }
+            }
+        }
+    }
+
+    // Filter contracts that haven't reached rollover date yet
+    validContracts = array(STRING, 0)
+    for (contract in knownContracts) {
+        if (strlen(contract) >= 5) {
+            contractYearStr = substr(contract, 1, 2)
+            contractMonthStr = substr(contract, 3, 2)
+
+            contractYear = 2000 + int(contractYearStr)
+            contractMonth = int(contractMonthStr)
+
+            monthStr = iif(contractMonth < 10, "0" + string(contractMonth), string(contractMonth))
+            dateStr = string(contractYear) + "." + monthStr + ".01"
+            expiryDate = date(dateStr)
+
+            rolloverDate = temporalAdd(expiryDate, -rolloverDays, `d)
+
+            if (currentDate <= rolloverDate) {
+                validContracts.append!(contract)
+            }
+        }
+    }
+
+    // Return the first valid contract (earliest expiry)
+    if (size(validContracts) > 0) {
+        return validContracts[0]
+    } else {
+        return NULL
+    }
+}
+
+// Volume-based fallback for live trading when no historical data available
+def getDominantContractVolume(dailyData) {
+    if (exec count(*) from dailyData == 0) return NULL
+
+    volumeByContract = select symbol, sum(volume) as total_volume
+                      from dailyData
+                      group by symbol
+                      order by total_volume desc
+
+    if (exec count(*) from volumeByContract == 0) return NULL
+
+    dominantSymbol = exec symbol from volumeByContract limit 1
+    return dominantSymbol[0]
+}
+
+// =============================================================================
+// CURRENT DOMINANT CONTRACT DETERMINATION
+// =============================================================================
+
+// Function to get current dominant contract for live trading
+def getCurrentDominantContract(contractType, currentDate, availableContracts = NULL) {
+    print("🔄 Determining current dominant contract for " + contractType + " on " + string(currentDate))
+    
+    // Use configuration based on contract type
+    rolloverDays = iif(contractType == "Y", @ROLLOVER_DAYS_BEFORE_EXPIRY_Y, @ROLLOVER_DAYS_BEFORE_EXPIRY_M)
+    
+    // If no available contracts provided, try to determine from CTP or use standard pattern
+    if (isNull(availableContracts) or size(availableContracts) == 0) {
+        print("⚠️ No available contracts provided, using default pattern for " + contractType)
+        
+        // Generate expected contracts for current period
+        expectedContracts = array(STRING, 0)
+        currentYear = year(currentDate)
+        
+        // Generate contracts for current and next year
+        for (yr in [currentYear, currentYear + 1]) {
+            yearSuffix = string(yr % 100)
+            if (strlen(yearSuffix) == 1) yearSuffix = "0" + yearSuffix
+            
+            for (month in @VALID_CONTRACT_MONTHS) {
+                monthStr = iif(month < 10, "0" + string(month), string(month))
+                contractSymbol = contractType + yearSuffix + monthStr
+                expectedContracts.append!(contractSymbol)
+            }
+        }
+        
+        availableContracts = expectedContracts
+        print("📋 Generated expected contracts: " + string(availableContracts))
+    }
+    
+    // Use calendar-based selection
+    dominantContract = getDominantContractCalendar(currentDate, availableContracts, 
+                                                  rolloverDays, @CONTRACT_LISTING_MONTHS_AHEAD, 
+                                                  @MIN_TRADING_DAYS_REQUIRED)
+    
+    if (!isNull(dominantContract)) {
+        print("✅ Dominant contract for " + contractType + ": " + string(dominantContract))
+        return dominantContract
+    } else {
+        print("⚠️ No valid dominant contract found for " + contractType + " using calendar method")
+        
+        // Fallback: return first available contract
+        if (size(availableContracts) > 0) {
+            fallbackContract = availableContracts[0]
+            print("🔄 Using fallback contract: " + string(fallbackContract))
+            return fallbackContract
+        }
+        
+        return NULL
+    }
+}
+
+// =============================================================================
+// ROLLOVER DETECTION FUNCTIONS
+// =============================================================================
+
+// Check if a rollover should occur
+def shouldRolloverContract(contractType, currentContract, currentDate, availableContracts = NULL) {
+    if (isNull(currentContract) or strlen(currentContract) < 5) return true
+    
+    // Parse current contract
+    contractYearStr = substr(currentContract, 1, 2)
+    contractMonthStr = substr(currentContract, 3, 2)
+    
+    contractYear = 2000 + int(contractYearStr)
+    contractMonth = int(contractMonthStr)
+    
+    monthStr = iif(contractMonth < 10, "0" + string(contractMonth), string(contractMonth))
+    dateStr = string(contractYear) + "." + monthStr + ".01"
+    expiryDate = date(dateStr)
+    
+    rolloverDays = iif(contractType == "Y", @ROLLOVER_DAYS_BEFORE_EXPIRY_Y, @ROLLOVER_DAYS_BEFORE_EXPIRY_M)
+    rolloverDate = temporalAdd(expiryDate, -rolloverDays, `d)
+    
+    shouldRollover = currentDate > rolloverDate
+    
+    if (shouldRollover) {
+        print("🔄 Rollover required for " + contractType + " contract " + string(currentContract) + 
+              " (rollover date: " + string(rolloverDate) + ", current: " + string(currentDate) + ")")
+    }
+    
+    return shouldRollover
+}
+
+// =============================================================================
+// INTEGRATION FUNCTIONS FOR LIVE TRADING
+// =============================================================================
+
+// Create rollover tracking table if it doesn't exist
+def ensureRolloverTracking() {
+    try { 
+        count = exec count(*) from contractRollover
+        print("✅ Rollover tracking table exists with " + string(count) + " records")
+    } catch(ex) {
+        print("📋 Creating rollover tracking table...")
+        share streamTable(1000:0, `time`contract_type`old_symbol`new_symbol`reason,
+                         [TIMESTAMP, STRING, STRING, STRING, STRING]) as contractRollover
+        print("✅ Rollover tracking table created")
+    }
+}
+
+// Record a rollover event
+def recordRolloverEvent(contractType, oldSymbol, newSymbol, reason) {
+    ensureRolloverTracking()
+    
+    rolloverRecord = table([now()] as time,
+                          [contractType] as contract_type,
+                          [oldSymbol] as old_symbol,
+                          [newSymbol] as new_symbol,
+                          [reason] as reason)
+    
+    contractRollover.append!(rolloverRecord)
+    
+    print("📋 Recorded rollover: " + contractType + " " + string(oldSymbol) + " → " + string(newSymbol) + " (" + reason + ")")
+}
+
+// =============================================================================
+// LIVE TRADING CONTRACT MONITORING
+// =============================================================================
+
+// Function to monitor and update contracts for live trading
+def monitorContractsForLiveTrading() {
+    currentDate = today()
+    
+    // Check Y contracts
+    try {
+        // Get available Y contracts from CTP or use current tracking
+        currentY = getCurrentDominantContract("Y", currentDate)
+        if (!isNull(currentY)) {
+            print("📈 Current Y dominant contract: " + string(currentY))
+        }
+    } catch(ex) {
+        print("⚠️ Y contract monitoring error: " + ex)
+    }
+    
+    // Check M contracts  
+    try {
+        // Get available M contracts from CTP or use current tracking
+        currentM = getCurrentDominantContract("M", currentDate)
+        if (!isNull(currentM)) {
+            print("📈 Current M dominant contract: " + string(currentM))
+        }
+    } catch(ex) {
+        print("⚠️ M contract monitoring error: " + ex)
+    }
+    
+    return true
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
+
+print("✅ Shared rollover logic functions loaded")
+print("🔄 Available functions:")
+print("  - getCurrentDominantContract(contractType, currentDate, availableContracts)")
+print("  - shouldRolloverContract(contractType, currentContract, currentDate, availableContracts)")
+print("  - recordRolloverEvent(contractType, oldSymbol, newSymbol, reason)")
+print("  - monitorContractsForLiveTrading()")
+
+// Ensure rollover tracking is available
+ensureRolloverTracking()
+
+print("🎯 Shared rollover logic ready for both backtest and live trading!")

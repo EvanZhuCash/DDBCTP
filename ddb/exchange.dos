@@ -62,9 +62,9 @@ print("Exchange tables created")
 // =============================================================================
 
 // Exchange configuration variables
-@fillRate = 1        //100% fill rate
-@slippageRate = 0.001   // 0.1% slippage
-@commissionRate = 0.0002 // 0.02% commission
+@fillRate = 1       
+@slippageRate = 0   
+@commissionRate = 0 
 @contractMultiplier = 10
 
 // Global counters

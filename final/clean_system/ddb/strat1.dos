@@ -1,0 +1,154 @@
+// =============================================================================
+// STRATEGY 1: Simple Momentum Strategy (Unified Data Distribution Compatible)
+// =============================================================================
+// Based on strategy1_simple_momentum.dos implementation
+// Flow: cleanup -> create streams -> signal handler -> subscribe to MD
+// Uses dominantContractStream data, no sample data
+// =============================================================================
+
+print("STRATEGY 1: Simple Momentum - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+try { unsubscribeTable(tableName=`momentumFeed1, actionName="timeSeriesAgg1") } catch(ex) { }
+try { unsubscribeTable(tableName=`aggData1, actionName="momentumCalc1") } catch(ex) { }
+try { unsubscribeTable(tableName=`signalResults1, actionName="convertSignals1") } catch(ex) { }
+try { dropStreamEngine("timeSeriesAgg1") } catch(ex) { }
+try { dropStreamEngine("momentumCalc1") } catch(ex) { }
+try { undef(`momentumFeed1, SHARED) } catch(ex) { }
+try { undef(`aggData1, SHARED) } catch(ex) { }
+try { undef(`strat1Signals, SHARED) } catch(ex) { }
+try { undef(`signalResults1, SHARED) } catch(ex) { }
+
+// =============================================================================
+// CREATE STREAMS
+// =============================================================================
+// Strategy 1 specific tables (no duplication with other strategies)
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as momentumFeed1
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as aggData1
+share streamTable(100000:0, `time`symbol`signal`position`strategy_id,
+                 [TIMESTAMP, SYMBOL, STRING, INT, INT]) as strat1Signals
+
+print("Strategy 1 tables created")
+
+// =============================================================================
+// SIGNAL HANDLER (@state functions)
+// =============================================================================
+@state
+def momentumSignal1(price) {
+    momentum = (price - prev(price)) / prev(price)
+    priceMA = mavg(price, 20)  // 20-period moving average for trend filter
+
+    // FINAL TUNING FOR HUNDREDS OF TRADES: Very low thresholds for active signals
+    return iif(isNull(momentum) or isNull(priceMA), "NO_TRADE",
+               iif(momentum > 0.001 and price > priceMA * 1.0002, "BUY_SIGNAL",
+                   iif(momentum < -0.001 and price < priceMA * 0.9998, "SELL_SIGNAL", "NO_TRADE")))
+}
+
+@state
+def targetPosition1(signal) {
+    return iif(signal == "BUY_SIGNAL", 100,
+               iif(signal == "SELL_SIGNAL", -100, 0))
+}
+
+// Stage 1: TimeSeriesEngine for data aggregation
+createTimeSeriesEngine(name="timeSeriesAgg1",
+                      windowSize=60000, step=60000,  // 1-minute windows
+                      metrics=<[last(price) as price]>,
+                      dummyTable=momentumFeed1, outputTable=aggData1,
+                      timeColumn=`time, useSystemTime=false,
+                      keyColumn=`sym, useWindowStartTime=false)
+
+// Create intermediate results table for ReactiveStateEngine
+share streamTable(100000:0, `sym`time`price`signal`position,
+                 [SYMBOL, TIMESTAMP, DOUBLE, STRING, INT]) as signalResults1
+
+// Stage 2: ReactiveStateEngine using @state functions for signal generation
+createReactiveStateEngine(name="momentumCalc1",
+                         metrics=<[time, price,
+                                  momentumSignal1(price) as signal,
+                                  targetPosition1(momentumSignal1(price)) as position]>,
+                         dummyTable=aggData1,
+                         outputTable=signalResults1,
+                         keyColumn=`sym)
+
+// Convert to standardized format
+def convertToStandardSignals1(data) {
+    if (size(data) == 0) return
+
+    standardSignals = table(data.time as time,
+                           data.sym as symbol,
+                           data.signal as signal,
+                           data.position as position,
+                           take(1, size(data)) as strategy_id)
+
+    strat1Signals.append!(standardSignals)
+}
+
+// =============================================================================
+// SUBSCRIBE TO MD
+// =============================================================================
+subscribeTable(tableName=`momentumFeed1, actionName="timeSeriesAgg1",
+               handler=tableInsert{getStreamEngine("timeSeriesAgg1")}, msgAsTable=true)
+
+subscribeTable(tableName=`aggData1, actionName="momentumCalc1",
+               handler=getStreamEngine("momentumCalc1"), msgAsTable=true)
+
+subscribeTable(tableName=`signalResults1, actionName="convertSignals1",
+               handler=convertToStandardSignals1, msgAsTable=true)
+
+print("Strategy 1 engines created and subscribed")
+
+// =============================================================================
+// SUBSCRIBE TO UNIFIED MARKET DATA
+// =============================================================================
+
+// Subscribe to unified market data feed (distributed from all sources)
+def processUnifiedMarketData1(mutable marketDataBatch) {
+    if (size(marketDataBatch) == 0) return
+    
+    // Convert unified market data to strategy format
+    strategyData = select time, symbol as sym, close as price from marketDataBatch
+    
+    // Feed into strategy engine
+    momentumFeed1.append!(strategyData)
+    
+    print("📊 Strategy 1 processed " + string(size(strategyData)) + " market data records")
+}
+
+// Subscribe to unified market data with retry logic
+def subscribeToUnifiedMarketData1() {
+    maxRetries = 10
+    retryCount = 0
+    
+    do {
+        try {
+            subscribeTable(tableName="unifiedMarketData", actionName="strat1_unified_subscription",
+                          handler=processUnifiedMarketData1, msgAsTable=true)
+            print("✅ Strategy 1 subscribed to unifiedMarketData")
+            return true
+        } catch(ex) {
+            retryCount += 1
+            print("⚠️ Strategy 1 Attempt " + string(retryCount) + "/10 - unifiedMarketData not ready: " + ex)
+            if (retryCount < maxRetries) {
+                sleep(1000)  // Wait 1 second before retry
+            }
+        }
+    } while (retryCount < maxRetries)
+    
+    print("❌ Strategy 1 failed to subscribe to unifiedMarketData")
+    return false
+}
+
+// Subscribe to unified market data (will be called manually after table setup)
+// subscriptionSuccess = subscribeToUnifiedMarketData1()
+
+// if (subscriptionSuccess) {
+//     print("✅ Strategy 1 is now receiving real-time unified market data")
+// } else {
+//     print("⚠️ Strategy 1 will wait for unified market data to become available")
+// }
+print("✅ Strategy 1 subscription function ready - will be activated manually")
+
+print("Strategy 1: Simple Momentum ready")

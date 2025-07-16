@@ -1,0 +1,238 @@
+/*
+ * SIMPLIFIED EXECUTION ENGINE
+ * ===========================
+ * Convert signals to trades with PnL calculation - simplified version that works
+ */
+
+print("🚀 SIMPLIFIED EXECUTION ENGINE - Starting...")
+
+// Create execution tables
+share table(100000:0, `timestamp`trade_id`strategy_id`symbol`side`quantity`price`realized_pnl`cumulative_pnl,
+           [TIMESTAMP, STRING, INT, SYMBOL, STRING, INT, DOUBLE, DOUBLE, DOUBLE]) as simpleTrades
+
+share table(100000:0, `timestamp`strategy_id`symbol`order_type`quantity`price`status,
+           [TIMESTAMP, INT, SYMBOL, STRING, INT, DOUBLE, STRING]) as simpleOrders
+
+share table(100:0, `strategy_id`symbol`position_qty`avg_price`unrealized_pnl`realized_pnl`total_pnl,
+           [INT, SYMBOL, INT, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as simplePositions
+
+share table(100000:0, `timestamp`strategy_id`cumulative_pnl`total_pnl`portfolio_value,
+           [TIMESTAMP, INT, DOUBLE, DOUBLE, DOUBLE]) as simplePnLCurve
+
+print("✅ Simple execution tables created")
+
+def executeSignalSimple(signalTime, strategyId, symbol, signalType, quantity) {
+    // Generate IDs
+    tradeId = "TRADE_" + string(strategyId) + "_" + string(rand(10000, 1)[0])
+    
+    // Get execution price (using signal time price with 1 min delay)
+    executionTime = signalTime + 60000
+    
+    // Find price in Y data
+    priceY = select * from dominantContractStreamY 
+             where datetime >= executionTime and symbol = symbol
+             order by datetime
+             limit 1
+    
+    // Find price in M data if not in Y
+    priceM = select * from dominantContractStreamM
+             where datetime >= executionTime and symbol = symbol  
+             order by datetime
+             limit 1
+    
+    executionPrice = 0.0
+    if (size(priceY) > 0) {
+        executionPrice = priceY.open[0]
+    } else if (size(priceM) > 0) {
+        executionPrice = priceM.open[0]
+    } else {
+        return ""  // No price found
+    }
+    
+    // Add slippage
+    side = iif(signalType == "BUY_SIGNAL", "BUY", "SELL")
+    finalPrice = iif(side == "BUY", executionPrice + 2, executionPrice - 2)
+    
+    // Create order
+    orderData = table([signalTime] as timestamp,
+                     [strategyId] as strategy_id,
+                     [symbol] as symbol,
+                     [side] as order_type,
+                     [quantity] as quantity,
+                     [finalPrice] as price,
+                     ["FILLED"] as status)
+    simpleOrders.append!(orderData)
+    
+    // Calculate PnL
+    realizedPnL = 0.0
+    
+    // Check for existing position
+    currentPos = select * from simplePositions where strategy_id = strategyId and symbol = symbol
+    
+    if (size(currentPos) == 0) {
+        // New position
+        newQty = iif(side == "BUY", quantity, -quantity)
+        posData = table([strategyId] as strategy_id,
+                       [symbol] as symbol,
+                       [newQty] as position_qty,
+                       [finalPrice] as avg_price,
+                       [0.0] as unrealized_pnl,
+                       [0.0] as realized_pnl,
+                       [0.0] as total_pnl)
+        simplePositions.append!(posData)
+    } else {
+        // Update existing position
+        oldQty = currentPos.position_qty[0]
+        oldAvgPrice = currentPos.avg_price[0]
+        oldRealizedPnL = currentPos.realized_pnl[0]
+        
+        // Calculate realized PnL if closing position
+        if ((oldQty > 0 and side == "SELL") or (oldQty < 0 and side == "BUY")) {
+            closedQty = min(quantity, abs(oldQty))
+            realizedPnL = iif(oldQty > 0,
+                            closedQty * (finalPrice - oldAvgPrice),
+                            closedQty * (oldAvgPrice - finalPrice))
+        }
+        
+        // Update position
+        newQty = iif(side == "BUY", oldQty + quantity, oldQty - quantity)
+        
+        if (newQty == 0) {
+            // Position closed
+            delete from simplePositions where strategy_id = strategyId and symbol = symbol
+        } else {
+            // Update position
+            newAvgPrice = iif(abs(newQty) > abs(oldQty), 
+                            (abs(oldQty) * oldAvgPrice + quantity * finalPrice) / abs(newQty),
+                            oldAvgPrice)
+            
+            unrealizedPnL = newQty * (finalPrice - newAvgPrice)
+            totalPnL = oldRealizedPnL + realizedPnL + unrealizedPnL
+            
+            update simplePositions set 
+                position_qty = newQty,
+                avg_price = newAvgPrice,
+                unrealized_pnl = unrealizedPnL,
+                realized_pnl = oldRealizedPnL + realizedPnL,
+                total_pnl = totalPnL
+            where strategy_id = strategyId and symbol = symbol
+        }
+    }
+    
+    // Get cumulative PnL
+    prevTrades = select * from simpleTrades where strategy_id = strategyId order by timestamp desc limit 1
+    cumulativePnL = iif(size(prevTrades) > 0, prevTrades.cumulative_pnl[0], 0.0) + realizedPnL
+    
+    // Create trade record
+    tradeData = table([executionTime] as timestamp,
+                     [tradeId] as trade_id,
+                     [strategyId] as strategy_id,
+                     [symbol] as symbol,
+                     [side] as side,
+                     [quantity] as quantity,
+                     [finalPrice] as price,
+                     [realizedPnL] as realized_pnl,
+                     [cumulativePnL] as cumulative_pnl)
+    simpleTrades.append!(tradeData)
+    
+    // Update PnL curve
+    totalPortfolioPnL = exec sum(total_pnl) from simplePositions where strategy_id = strategyId
+    if (size(totalPortfolioPnL) == 0) totalPortfolioPnL = 0.0
+    else totalPortfolioPnL = totalPortfolioPnL[0]
+    
+    portfolioValue = 1000000.0 + totalPortfolioPnL
+    
+    pnlData = table([executionTime] as timestamp,
+                   [strategyId] as strategy_id,
+                   [cumulativePnL] as cumulative_pnl,
+                   [totalPortfolioPnL] as total_pnl,
+                   [portfolioValue] as portfolio_value)
+    simplePnLCurve.append!(pnlData)
+    
+    return tradeId
+}
+
+def executeAllSignalsSimple() {
+    print("⚡ EXECUTING ALL SIGNALS WITH SIMPLE ENGINE")
+    print(string(take("=", 50)))
+    
+    totalExecuted = 0
+    
+    for (stratId in 0..4) {
+        stratTable = "strat" + string(stratId) + "Signals"
+        
+        try {
+            signals = select * from objByName(stratTable) order by time
+            print("Processing Strategy " + string(stratId) + ": " + string(size(signals)) + " signals")
+            
+            for (i in 0..(size(signals)-1)) {
+                signalTime = signals.time[i]
+                symbol = signals.symbol[i]
+                signalType = signals.signal[i]
+                quantity = abs(signals.position[i])
+                
+                if (quantity > 0 and (signalType == "BUY_SIGNAL" or signalType == "SELL_SIGNAL")) {
+                    tradeId = executeSignalSimple(signalTime, stratId, symbol, signalType, quantity)
+                    if (tradeId != "") {
+                        totalExecuted += 1
+                    }
+                }
+                
+                if (totalExecuted % 1000 == 0 and totalExecuted > 0) {
+                    print("Executed " + string(totalExecuted) + " trades...")
+                }
+            }
+            
+        } catch(ex) {
+            print("Strategy " + string(stratId) + " error: " + ex)
+        }
+    }
+    
+    print("\\n📊 EXECUTION COMPLETED:")
+    print("  Total trades executed: " + string(totalExecuted))
+    
+    return totalExecuted
+}
+
+def generatePerformanceReport() {
+    print("📈 GENERATING PERFORMANCE REPORT")
+    print(string(take("=", 50)))
+    
+    // Strategy performance
+    stratPerf = select strategy_id,
+                      count(*) as total_trades,
+                      round(sum(realized_pnl), 0) as total_realized_pnl,
+                      round(max(cumulative_pnl), 0) as final_cumulative_pnl,
+                      round(avg(realized_pnl), 2) as avg_trade_pnl
+               from simpleTrades
+               group by strategy_id
+               order by strategy_id
+    
+    print("\\n💰 STRATEGY PERFORMANCE:")
+    print(stratPerf)
+    
+    // Overall performance
+    totalTrades = exec count(*) from simpleTrades
+    totalRealizedPnL = exec sum(realized_pnl) from simpleTrades
+    totalUnrealizedPnL = exec sum(unrealized_pnl) from simplePositions
+    totalPnL = totalRealizedPnL + totalUnrealizedPnL
+    openPositions = exec count(*) from simplePositions
+    
+    print("\\n🏆 OVERALL PERFORMANCE:")
+    print("  Total trades: " + string(totalTrades))
+    print("  Total realized PnL: " + string(round(totalRealizedPnL, 0)))
+    print("  Total unrealized PnL: " + string(round(totalUnrealizedPnL, 0)))
+    print("  Total PnL: " + string(round(totalPnL, 0)))
+    print("  Open positions: " + string(openPositions))
+    
+    // PnL curve summary
+    pnlPoints = exec count(*) from simplePnLCurve
+    print("  PnL curve points: " + string(pnlPoints))
+    
+    return totalPnL
+}
+
+print("✅ Simple execution engine ready")
+print("🔧 Available functions:")
+print("  - executeAllSignalsSimple() -> Execute all signals")
+print("  - generatePerformanceReport() -> Generate performance report")

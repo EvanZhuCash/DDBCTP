@@ -12,8 +12,8 @@ formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
-from vnpy_ctp.vnpy_ctp import CtpGateway
-from vnpy_ctp.vnpy_ctp.api import (
+from vnpy_ctp import CtpGateway
+from vnpy_ctp.api import (
   MdApi,
   TdApi,
   THOST_FTDC_OPT_LimitPrice,
@@ -1013,6 +1013,11 @@ def cancel_order(gateway):
   print("thread_cancel_order is out")
   
 if __name__ == "__main__":
+  # First run cleanup
+  print("Running cleanup...")
+  import subprocess
+  subprocess.run(["python", "cleanup.py"], cwd=".")
+
 
   print("Starting live simulation...")
   # initialize dolphindb server

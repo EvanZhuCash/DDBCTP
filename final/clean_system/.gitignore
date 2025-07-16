@@ -1,0 +1,33 @@
+# CTP temporary files
+ctp_temp/
+*.con
+
+# Log files
+logs/
+*.log
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*/__pycache__/
+*/logs/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# DolphinDB temporary files
+*.tmp
+*.temp
+
+# Test and utility outputs
+utils/*.csv
+tests/*.csv

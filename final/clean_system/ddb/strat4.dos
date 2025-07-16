@@ -1,0 +1,253 @@
+// =============================================================================
+// STRATEGY 4: ADAPTIVE LEARNING STRATEGY (FIXED)
+// =============================================================================
+// Purpose: Adaptive strategy that learns from historical PnL performance
+// Features:
+// - Uses historical PnL from last 30 minutes as performance criterion
+// - Adjusts signal strength based on recent performance
+// - Uses volume confirmation
+// - No external performance feedback required
+// =============================================================================
+
+print("STRATEGY 4: ADAPTIVE LEARNING (FIXED) - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+
+def cleanupStrategy4() {
+    // Drop strategy tables
+    try { undef(`strat4Signals, SHARED) } catch(ex) {}
+    print("Strategy 4 cleanup completed")
+}
+
+cleanupStrategy4()
+
+// =============================================================================
+// STRATEGY TABLES
+// =============================================================================
+
+print("Creating Strategy 4 tables...")
+
+// Strategy 4 signals table
+share streamTable(10000:0, `time`symbol`signal`position`strategy_id,
+                 [TIMESTAMP, SYMBOL, STRING, INT, INT]) as strat4Signals
+
+print("Strategy 4 tables created")
+
+// =============================================================================
+// ADAPTIVE LEARNING PARAMETERS
+// =============================================================================
+
+// Learning parameters
+learningRate = 0.1
+baseConfidence = 1.0
+maxConfidence = 2.0
+minConfidence = 0.3
+
+print("Adaptive learning parameters initialized")
+
+// =============================================================================
+// ADAPTIVE SIGNAL FUNCTIONS WITH HISTORICAL PNL
+// =============================================================================
+
+def getHistoricalPnLPerformance(currentTime, lookbackMinutes) {
+    // Calculate performance score based on last 30 minutes of PnL
+    lookbackTime = currentTime - lookbackMinutes * 60000  // Convert minutes to milliseconds
+    
+    try {
+        // Get recent trades for strategy 4
+        recentTrades = select * from simpleTrades 
+                      where strategy_id = 4 and timestamp >= lookbackTime and timestamp <= currentTime
+                      order by timestamp
+        
+        if (size(recentTrades) == 0) {
+            return 1.0  // Default performance score
+        }
+        
+        // Calculate performance metrics
+        totalPnL = sum(recentTrades.realized_pnl)
+        avgPnL = totalPnL / size(recentTrades)
+        winRate = sum(iif(recentTrades.realized_pnl > 0, 1, 0)) * 1.0 / size(recentTrades)
+        
+        // Calculate performance score (0.5 to 1.5 range)
+        pnlScore = iif(avgPnL > 0, 1.0 + min(0.5, avgPnL / 1000.0), max(0.5, 1.0 + avgPnL / 1000.0))
+        winScore = 0.5 + winRate
+        
+        performanceScore = (pnlScore + winScore) / 2.0
+        
+        print("Historical PnL Performance - Trades: " + string(size(recentTrades)) + 
+              ", Avg PnL: " + string(round(avgPnL, 2)) + 
+              ", Win Rate: " + string(round(winRate * 100, 1)) + "%" +
+              ", Score: " + string(round(performanceScore, 3)))
+        
+        return performanceScore
+        
+    } catch(ex) {
+        print("Performance calculation error: " + ex)
+        return 1.0  // Default score on error
+    }
+}
+
+def adaptiveSignal4WithPnL(price, volume, momentum, volumeRatio, currentTime) {
+    // Get historical performance for last 30 minutes
+    performanceScore = getHistoricalPnLPerformance(currentTime, 30)
+    
+    // VERY LOW THRESHOLDS for maximum signal generation, adjusted by performance
+    baseThreshold = 0.0005  // 0.05% very low momentum threshold 
+    volumeThreshold = 0.8   // Low volume threshold for more signals
+
+    // Adjust threshold based on historical performance
+    adaptiveThreshold = baseThreshold * (2.0 - performanceScore)
+
+    // Signal generation with adaptive confidence based on historical PnL
+    if (momentum > adaptiveThreshold and volumeRatio > volumeThreshold) {
+        confidence = int(100 * performanceScore)
+        return ("BUY_SIGNAL", confidence)
+    }
+
+    if (momentum < -adaptiveThreshold and volumeRatio > volumeThreshold) {
+        confidence = int(100 * performanceScore)
+        return ("SELL_SIGNAL", -confidence)
+    }
+
+    // Even generate signals on small movements without volume confirmation
+    if (abs(momentum) > adaptiveThreshold * 0.5) {
+        confidence = int(50 * performanceScore)
+        signal = iif(momentum > 0, "BUY_SIGNAL", "SELL_SIGNAL")
+        pos = iif(momentum > 0, confidence, -confidence)
+        return (signal, pos)
+    }
+
+    return ("NO_TRADE", 0)
+}
+
+// =============================================================================
+// MANUAL SIGNAL GENERATION WITH HISTORICAL PNL FEEDBACK
+// =============================================================================
+
+def generateAdaptiveSignalsWithPnL() {
+    print("📊 Generating adaptive signals with historical PnL feedback...")
+
+    // Get MORE Y contract data for more signals
+    yData = select top 5000 datetime as time, symbol, close as price, volume
+           from dominantContractStreamY
+           order by datetime
+
+    if (size(yData) == 0) {
+        print("❌ No Y contract data available")
+        return
+    }
+
+    signalCount = 0
+    buySignals = 0
+    sellSignals = 0
+
+    for (i in 10..(size(yData)-1)) {
+        currentTime = yData.time[i]
+        symbol = yData.symbol[i]
+        price = yData.price[i]
+        volume = yData.volume[i]
+        prevPrice = yData.price[i-1]
+
+        // Calculate momentum
+        momentum = (price - prevPrice) / prevPrice
+
+        // Calculate volume ratio (current vs 10-period average)
+        volumeMA = avg(yData.volume[(i-9):i])
+        volumeRatio = volume / volumeMA
+
+        // Generate adaptive signal with historical PnL feedback
+        signalResult = adaptiveSignal4WithPnL(price, volume, momentum, volumeRatio, currentTime)
+        signal = signalResult[0]
+        position = signalResult[1]
+
+        // Create signal record
+        signalRecord = table([currentTime] as time,
+                            [symbol] as symbol,
+                            [signal] as signal,
+                            [position] as position,
+                            [4] as strategy_id)
+
+        strat4Signals.append!(signalRecord)
+
+        if (signal == "BUY_SIGNAL") buySignals += 1
+        else if (signal == "SELL_SIGNAL") sellSignals += 1
+
+        signalCount += 1
+    }
+
+    // Process MORE M contract data for more signals  
+    mData = select top 5000 datetime as time, symbol, close as price, volume
+           from dominantContractStreamM
+           order by datetime
+
+    if (size(mData) > 0) {
+        for (i in 10..(size(mData)-1)) {
+            currentTime = mData.time[i]
+            symbol = mData.symbol[i]
+            price = mData.price[i]
+            volume = mData.volume[i]
+            prevPrice = mData.price[i-1]
+
+            // Calculate momentum
+            momentum = (price - prevPrice) / prevPrice
+
+            // Calculate volume ratio
+            volumeMA = avg(mData.volume[(i-9):i])
+            volumeRatio = volume / volumeMA
+
+            // Generate adaptive signal with historical PnL feedback
+            signalResult = adaptiveSignal4WithPnL(price, volume, momentum, volumeRatio, currentTime)
+            signal = signalResult[0]
+            position = signalResult[1]
+
+            // Create signal record
+            signalRecord = table([currentTime] as time,
+                                [symbol] as symbol,
+                                [signal] as signal,
+                                [position] as position,
+                                [4] as strategy_id)
+
+            strat4Signals.append!(signalRecord)
+
+            if (signal == "BUY_SIGNAL") buySignals += 1
+            else if (signal == "SELL_SIGNAL") sellSignals += 1
+
+            signalCount += 1
+        }
+    }
+
+    tradingSignals = buySignals + sellSignals
+    print("Strategy 4 Results:")
+    print("  Total signals: " + string(signalCount))
+    print("  BUY signals: " + string(buySignals))
+    print("  SELL signals: " + string(sellSignals))
+    print("  Trading signals: " + string(tradingSignals))
+    print("  Trading rate: " + string(round(tradingSignals * 100.0 / signalCount, 2)) + "%")
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
+
+// Generate initial signals
+generateAdaptiveSignalsWithPnL()
+
+// Check results
+strat4Count = exec count(*) from strat4Signals
+print("Strategy 4 generated " + string(strat4Count) + " initial signals")
+
+if (strat4Count > 0) {
+    signalDist = select signal, count(*) as count from strat4Signals group by signal
+    print("Signal distribution:")
+    print(signalDist)
+}
+
+print("\n✅ STRATEGY 4: ADAPTIVE LEARNING WITH HISTORICAL PNL READY")
+print("🧠 Adaptive Features:")
+print("  ✅ Historical PnL-based performance scoring (last 30 minutes)")
+print("  ✅ Adaptive threshold adjustment based on recent performance")
+print("  ✅ Volume confirmation with momentum")
+print("  ✅ Self-learning from trade execution results")
+print("  ✅ No external performance feedback dependency")

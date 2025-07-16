@@ -1,0 +1,178 @@
+// =============================================================================
+// STRATEGY 3: Cross-Sectional Exploration Strategy (Bollinger Bands)
+// =============================================================================
+// Based on strategy3_cross_sectional_exploration.dos implementation
+// Flow: cleanup -> create streams -> signal handler -> subscribe to MD
+// Uses dominantContractStream data, Cross-Sectional Engine for live trading
+// =============================================================================
+
+print("STRATEGY 3: Cross-Sectional Exploration (Bollinger Bands) - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+try { unsubscribeTable(tableName=`tickStream3, actionName="timeSeriesAgg3") } catch(ex) { }
+try { unsubscribeTable(tableName=`agg1min3, actionName="crossSectionalBollinger3") } catch(ex) { }
+try { unsubscribeTable(tableName=`bollST3, actionName="signalCalc3") } catch(ex) { }
+try { dropStreamEngine("timeSeriesAgg3") } catch(ex) { }
+try { dropStreamEngine("crossSectionalBollinger3") } catch(ex) { }
+try { dropStreamEngine("signalCalc3") } catch(ex) { }
+try { undef(`tickStream3, SHARED) } catch(ex) { }
+try { undef(`agg1min3, SHARED) } catch(ex) { }
+try { undef(`bollST3, SHARED) } catch(ex) { }
+try { undef(`strat3Signals, SHARED) } catch(ex) { }
+try { undef(`signalResultsStrat3, SHARED) } catch(ex) { }
+
+// =============================================================================
+// CREATE STREAMS
+// =============================================================================
+// Strategy 3 specific tables (no duplication)
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as tickStream3
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as agg1min3
+share streamTable(100000:0, `time`sym`close`upper`mean`lower`key_col, [TIMESTAMP, SYMBOL, DOUBLE, DOUBLE, DOUBLE, DOUBLE, SYMBOL]) as bollST3
+share streamTable(100000:0, `time`symbol`signal`position`strategy_id,
+                 [TIMESTAMP, SYMBOL, STRING, INT, INT]) as strat3Signals
+
+print("Strategy 3 tables created")
+
+// =============================================================================
+// SIGNAL HANDLER (@state functions)
+// =============================================================================
+@state
+def bollingerSignal3(close, upper, mean, lower) {
+    return iif(isNull(mean), "NO_TRADE",
+               iif(close > upper, "SELL_SIGNAL",
+                   iif(close < lower, "BUY_SIGNAL", "NO_TRADE")))
+}
+
+@state
+def targetPosition3(signal) {
+    return iif(signal == "BUY_SIGNAL", 100,
+               iif(signal == "SELL_SIGNAL", -100, 0))
+}
+
+// Load required modules
+use ta
+
+// Stage 1: TimeSeriesEngine for data aggregation
+createTimeSeriesEngine(name="timeSeriesAgg3",
+                      windowSize=60000, step=60000,  // 1-minute windows
+                      metrics=<[last(price) as price]>,
+                      dummyTable=tickStream3, outputTable=agg1min3,
+                      timeColumn=`time, useSystemTime=false,
+                      keyColumn=`sym, useWindowStartTime=false)
+
+// Stage 2: Cross-Sectional Engine for Bollinger Bands calculation
+// Adjusted parameters for hundreds of trades:
+// - timePeriod=10 (longer period for more stable bands)
+// - nbdevUp=1.5, nbdevDn=1.5 (wider bands for moderate signal frequency)
+createCrossSectionalEngine(
+    name="crossSectionalBollinger3",
+    metrics=<[sym, price as close,
+              ta::bBands(price, timePeriod=10, nbdevUp=1.5, nbdevDn=1.5, maType=0)[0] as upper,
+              ta::bBands(price, timePeriod=10, nbdevUp=1.5, nbdevDn=1.5, maType=0)[1] as mean,
+              ta::bBands(price, timePeriod=10, nbdevUp=1.5, nbdevDn=1.5, maType=0)[2] as lower,
+              sym as key_col]>,
+    dummyTable=agg1min3,
+    outputTable=bollST3,
+    keyColumn=`sym,
+    triggeringPattern="perBatch",
+    useSystemTime=false,
+    timeColumn=`time
+)
+
+// Create intermediate results table for ReactiveStateEngine - UNIQUE NAME
+share streamTable(100000:0, `sym`time`close`signal`position,
+                 [SYMBOL, TIMESTAMP, DOUBLE, STRING, INT]) as signalResultsStrat3
+
+// Stage 3: ReactiveStateEngine for signal generation
+createReactiveStateEngine(name="signalCalc3",
+                         metrics=<[time, close,
+                                  bollingerSignal3(close, upper, mean, lower) as signal,
+                                  targetPosition3(bollingerSignal3(close, upper, mean, lower)) as position]>,
+                         dummyTable=bollST3,
+                         outputTable=signalResultsStrat3,
+                         keyColumn=`sym)
+
+// Convert to standardized format
+def convertToStandardSignals3(data) {
+    if (size(data) == 0) return
+
+    standardSignals = table(data.time as time,
+                           data.sym as symbol,
+                           data.signal as signal,
+                           data.position as position,
+                           take(3, size(data)) as strategy_id)
+
+    strat3Signals.append!(standardSignals)
+}
+
+// =============================================================================
+// SUBSCRIBE TO MD
+// =============================================================================
+subscribeTable(tableName=`tickStream3, actionName="timeSeriesAgg3",
+               handler=tableInsert{getStreamEngine("timeSeriesAgg3")}, msgAsTable=true)
+
+subscribeTable(tableName=`agg1min3, actionName="crossSectionalBollinger3",
+               handler=tableInsert{getStreamEngine("crossSectionalBollinger3")}, msgAsTable=true)
+
+subscribeTable(tableName=`bollST3, actionName="signalCalc3",
+               handler=getStreamEngine("signalCalc3"), msgAsTable=true)
+
+subscribeTable(tableName="signalResultsStrat3", actionName="convertSignals3",
+               handler=convertToStandardSignals3, msgAsTable=true)
+
+print("Strategy 3 engines created and subscribed")
+
+// =============================================================================
+// SUBSCRIBE TO UNIFIED MARKET DATA
+// =============================================================================
+
+// Subscribe to unified market data feed (distributed from all sources)
+def processUnifiedMarketData3(mutable marketDataBatch) {
+    if (size(marketDataBatch) == 0) return
+    
+    // Convert unified market data to strategy format (combine Y and M for cross-sectional analysis)
+    strategyData = select time, symbol as sym, close as price from marketDataBatch
+    
+    // Feed into tick stream for cross-sectional analysis
+    tickStream3.append!(strategyData)
+    
+    print("📊 Strategy 3 processed " + string(size(strategyData)) + " market data records for cross-sectional analysis")
+}
+
+// Subscribe to unified market data with retry logic
+def subscribeToUnifiedMarketData3() {
+    maxRetries = 10
+    retryCount = 0
+    
+    do {
+        try {
+            subscribeTable(tableName="unifiedMarketData", actionName="strat3_unified_subscription",
+                          handler=processUnifiedMarketData3, msgAsTable=true)
+            print("✅ Strategy 3 subscribed to unifiedMarketData")
+            return true
+        } catch(ex) {
+            retryCount += 1
+            print("⚠️ Strategy 3 Attempt " + string(retryCount) + "/10 - unifiedMarketData not ready: " + ex)
+            if (retryCount < maxRetries) {
+                sleep(1000)  // Wait 1 second before retry
+            }
+        }
+    } while (retryCount < maxRetries)
+    
+    print("❌ Strategy 3 failed to subscribe to unifiedMarketData")
+    return false
+}
+
+// Subscribe to unified market data (will be called manually after table setup)
+// subscriptionSuccess = subscribeToUnifiedMarketData3()
+
+// if (subscriptionSuccess) {
+//     print("✅ Strategy 3 is now receiving real-time unified market data")
+// } else {
+//     print("⚠️ Strategy 3 will wait for unified market data to become available")
+// }
+print("✅ Strategy 3 subscription function ready - will be activated manually")
+
+print("Strategy 3: Cross-Sectional Exploration (Bollinger Bands) ready")

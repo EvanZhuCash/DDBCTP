@@ -1,0 +1,197 @@
+// =============================================================================
+// STRATEGY 2: Multiple Momentum Strategy (Y & M Contracts) - FIXED
+// =============================================================================
+// Fixed version to ensure proper loading and data flow
+// =============================================================================
+
+print("STRATEGY 2: Multiple Momentum (Y & M) - FIXED - Starting...")
+
+// =============================================================================
+// CLEANUP
+// =============================================================================
+try { unsubscribeTable(tableName=`momentumFeedY2, actionName="timeSeriesAggY2") } catch(ex) { }
+try { unsubscribeTable(tableName=`momentumFeedM2, actionName="timeSeriesAggM2") } catch(ex) { }
+try { unsubscribeTable(tableName=`aggDataY2, actionName="momentumCalcY2") } catch(ex) { }
+try { unsubscribeTable(tableName=`aggDataM2, actionName="momentumCalcM2") } catch(ex) { }
+try { unsubscribeTable(tableName="signalResultsYStrat2", actionName="convertSignalsY2") } catch(ex) { }
+try { unsubscribeTable(tableName="signalResultsMStrat2", actionName="convertSignalsM2") } catch(ex) { }
+try { unsubscribeTable(tableName="unifiedMarketData", actionName="strat2_unified_subscription") } catch(ex) { }
+try { dropStreamEngine("timeSeriesAggY2") } catch(ex) { }
+try { dropStreamEngine("timeSeriesAggM2") } catch(ex) { }
+try { dropStreamEngine("momentumCalcY2") } catch(ex) { }
+try { dropStreamEngine("momentumCalcM2") } catch(ex) { }
+try { undef(`momentumFeedY2, SHARED) } catch(ex) { }
+try { undef(`momentumFeedM2, SHARED) } catch(ex) { }
+try { undef(`aggDataY2, SHARED) } catch(ex) { }
+try { undef(`aggDataM2, SHARED) } catch(ex) { }
+try { undef(`strat2Signals, SHARED) } catch(ex) { }
+try { undef(`signalResultsYStrat2, SHARED) } catch(ex) { }
+try { undef(`signalResultsMStrat2, SHARED) } catch(ex) { }
+
+// =============================================================================
+// CREATE STREAMS
+// =============================================================================
+// Strategy 2 specific tables for Y and M contracts (no duplication)
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as momentumFeedY2
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as momentumFeedM2
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as aggDataY2
+share streamTable(100000:0, `time`sym`price, [TIMESTAMP, SYMBOL, DOUBLE]) as aggDataM2
+share streamTable(100000:0, `time`symbol`signal`position`strategy_id,
+                 [TIMESTAMP, SYMBOL, STRING, INT, INT]) as strat2Signals
+
+// Create intermediate results tables for ReactiveStateEngines - UNIQUE NAMES
+share streamTable(100000:0, `sym`time`price`signal`position,
+                 [SYMBOL, TIMESTAMP, DOUBLE, STRING, INT]) as signalResultsYStrat2
+share streamTable(100000:0, `sym`time`price`signal`position,
+                 [SYMBOL, TIMESTAMP, DOUBLE, STRING, INT]) as signalResultsMStrat2
+
+print("Strategy 2 tables created")
+
+// =============================================================================
+// SIGNAL HANDLER (@state functions)
+// =============================================================================
+@state
+def momentumSignal2(price) {
+    momentum = (price - prev(price)) / prev(price)
+    priceMA = mavg(price, 30)  // 30-period moving average for trend filter
+
+    // FINAL TUNING FOR HUNDREDS OF TRADES: Ultra-low thresholds for maximum signals
+    return iif(isNull(momentum) or isNull(priceMA), "NO_TRADE",
+               iif(momentum > 0.001 and price > priceMA * 1.0001, "BUY_SIGNAL",
+                   iif(momentum < -0.001 and price < priceMA * 0.9999, "SELL_SIGNAL", "NO_TRADE")))
+}
+
+@state
+def targetPosition2(signal) {
+    return iif(signal == "BUY_SIGNAL", 100,
+               iif(signal == "SELL_SIGNAL", -100, 0))
+}
+
+// Convert to standardized format
+def convertToStandardSignals2(data) {
+    if (size(data) == 0) return
+
+    standardSignals = table(data.time as time,
+                           data.sym as symbol,
+                           data.signal as signal,
+                           data.position as position,
+                           take(2, size(data)) as strategy_id)
+
+    strat2Signals.append!(standardSignals)
+}
+
+print("Strategy 2 functions created")
+
+// =============================================================================
+// CREATE ENGINES
+// =============================================================================
+// Y Strategy Engines
+createTimeSeriesEngine(name="timeSeriesAggY2",
+                      windowSize=60000, step=60000,
+                      metrics=<[last(price) as price]>,
+                      dummyTable=momentumFeedY2, outputTable=aggDataY2,
+                      timeColumn=`time, useSystemTime=false,
+                      keyColumn=`sym, useWindowStartTime=false)
+
+createReactiveStateEngine(name="momentumCalcY2",
+                         metrics=<[time, price,
+                                  momentumSignal2(price) as signal,
+                                  targetPosition2(momentumSignal2(price)) as position]>,
+                         dummyTable=aggDataY2,
+                         outputTable=signalResultsYStrat2,
+                         keyColumn=`sym)
+
+// M Strategy Engines
+createTimeSeriesEngine(name="timeSeriesAggM2",
+                      windowSize=60000, step=60000,
+                      metrics=<[last(price) as price]>,
+                      dummyTable=momentumFeedM2, outputTable=aggDataM2,
+                      timeColumn=`time, useSystemTime=false,
+                      keyColumn=`sym, useWindowStartTime=false)
+
+createReactiveStateEngine(name="momentumCalcM2",
+                         metrics=<[time, price,
+                                  momentumSignal2(price) as signal,
+                                  targetPosition2(momentumSignal2(price)) as position]>,
+                         dummyTable=aggDataM2,
+                         outputTable=signalResultsMStrat2,
+                         keyColumn=`sym)
+
+print("Strategy 2 engines created")
+
+// =============================================================================
+// SUBSCRIBE TO MD
+// =============================================================================
+subscribeTable(tableName=`momentumFeedY2, actionName="timeSeriesAggY2",
+               handler=tableInsert{getStreamEngine("timeSeriesAggY2")}, msgAsTable=true)
+
+subscribeTable(tableName=`aggDataY2, actionName="momentumCalcY2",
+               handler=getStreamEngine("momentumCalcY2"), msgAsTable=true)
+
+subscribeTable(tableName=`momentumFeedM2, actionName="timeSeriesAggM2",
+               handler=tableInsert{getStreamEngine("timeSeriesAggM2")}, msgAsTable=true)
+
+subscribeTable(tableName=`aggDataM2, actionName="momentumCalcM2",
+               handler=getStreamEngine("momentumCalcM2"), msgAsTable=true)
+
+// Subscribe to convert intermediate results to standard format
+subscribeTable(tableName="signalResultsYStrat2", actionName="convertSignalsY2",
+               handler=convertToStandardSignals2, msgAsTable=true)
+
+subscribeTable(tableName="signalResultsMStrat2", actionName="convertSignalsM2",
+               handler=convertToStandardSignals2, msgAsTable=true)
+
+print("Strategy 2 engines created and subscribed")
+
+// =============================================================================
+// SUBSCRIBE TO UNIFIED MARKET DATA
+// =============================================================================
+
+// Subscribe to unified market data feed (distributed from all sources)
+def processUnifiedMarketData2(mutable marketDataBatch) {
+    if (size(marketDataBatch) == 0) return
+    
+    // Convert unified market data to strategy format and split by source
+    yData = select time, symbol as sym, close as price from marketDataBatch where source = "BACKTEST_Y"
+    mData = select time, symbol as sym, close as price from marketDataBatch where source = "BACKTEST_M"
+    
+    // Feed Y data into Y momentum feed
+    if (size(yData) > 0) {
+        momentumFeedY2.append!(yData)
+        print("📊 Strategy 2 processed " + string(size(yData)) + " Y contract records")
+    }
+    
+    // Feed M data into M momentum feed  
+    if (size(mData) > 0) {
+        momentumFeedM2.append!(mData)
+        print("📊 Strategy 2 processed " + string(size(mData)) + " M contract records")
+    }
+}
+
+// Subscribe to unified market data with retry logic
+def subscribeToUnifiedMarketData2() {
+    maxRetries = 10
+    retryCount = 0
+    
+    do {
+        try {
+            subscribeTable(tableName="unifiedMarketData", actionName="strat2_unified_subscription",
+                          handler=processUnifiedMarketData2, msgAsTable=true)
+            print("✅ Strategy 2 subscribed to unifiedMarketData")
+            return true
+        } catch(ex) {
+            retryCount += 1
+            print("⚠️ Strategy 2 Attempt " + string(retryCount) + "/10 - unifiedMarketData not ready: " + ex)
+            if (retryCount < maxRetries) {
+                sleep(1000)  // Wait 1 second before retry
+            }
+        }
+    } while (retryCount < maxRetries)
+    
+    print("❌ Strategy 2 failed to subscribe to unifiedMarketData")
+    return false
+}
+
+print("✅ Strategy 2 subscription function ready - will be activated manually")
+
+print("Strategy 2: Multiple Momentum (Y & M) ready")

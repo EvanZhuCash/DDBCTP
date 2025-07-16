@@ -89,11 +89,20 @@ class ContractDiscovery:
 
                 def onRspQryInstrument(self, data, error, reqid, last):
                     """合约查询回报"""
+                    if error and error.get("ErrorID", 0) != 0:
+                        self.discovery.logger.error(f"合约查询错误: {error}")
+                        if last:
+                            self.discovery.contract_query_complete = True
+                        return
+                    
                     if data and data.get("ProductClass") == THOST_FTDC_PC_Futures:
                         # 只收集期货合约
                         instrument_id = data.get("InstrumentID", "")
                         if instrument_id and self._is_valid_futures_contract(instrument_id):
                             self.discovery.discovered_contracts.append(instrument_id)
+                            # 每100个合约打印一次进度
+                            if len(self.discovery.discovered_contracts) % 100 == 0:
+                                self.discovery.logger.info(f"已发现 {len(self.discovery.discovered_contracts)} 个期货合约...")
 
                     if last:
                         self.discovery.logger.info(f"合约查询完成，发现 {len(self.discovery.discovered_contracts)} 个期货合约")
@@ -136,7 +145,14 @@ class ContractDiscovery:
                     self.discovery.logger.info("开始查询所有合约...")
                     self.reqid += 1
                     # 空字典表示查询所有合约
-                    self.reqQryInstrument({}, self.reqid)
+                    result = self.reqQryInstrument({}, self.reqid)
+                    self.discovery.logger.info(f"合约查询请求已发送，返回值: {result}")
+                
+                def onRspError(self, error, reqid, last):
+                    """错误回报"""
+                    self.discovery.logger.error(f"CTP API错误: {error}")
+                    if last:
+                        self.discovery.contract_query_complete = True
 
             # 创建API实例
             self.ctp_api = ContractQueryApi(self)
@@ -148,21 +164,51 @@ class ContractDiscovery:
             self.ctp_api.registerFront(self.ctp_setting["交易服务器"])
             self.ctp_api.init()
 
-            # 等待查询完成（最多等待30秒）
+            # 等待查询完成（动态等待，直到订阅成功）
             import time
-            timeout = 30
             start_time = time.time()
+            last_count = 0
+            stable_count = 0
 
-            while not self.contract_query_complete and (time.time() - start_time) < timeout:
-                time.sleep(0.1)
+            self.logger.info("等待CTP合约查询和订阅完成...")
+            
+            while not self.contract_query_complete:
+                time.sleep(1)
+                current_count = len(self.discovered_contracts)
+                elapsed = int(time.time() - start_time)
+                
+                # 每5秒打印进度
+                if elapsed % 5 == 0:
+                    self.logger.info(f"合约发现进度: {current_count} 个合约 ({elapsed}s)")
+                
+                # 检查合约数量是否稳定（连续5秒无变化则认为查询可能完成）
+                if current_count == last_count:
+                    stable_count += 1
+                    if stable_count >= 5 and current_count > 0:
+                        self.logger.info(f"合约数量稳定在 {current_count} 个，强制完成查询")
+                        self.contract_query_complete = True
+                        break
+                else:
+                    stable_count = 0
+                    last_count = current_count
+                
+                # 最大等待时间180秒（3分钟）
+                if elapsed > 180:
+                    if current_count > 0:
+                        self.logger.info(f"达到最大等待时间，使用已发现的 {current_count} 个合约")
+                        self.contract_query_complete = True
+                        break
+                    else:
+                        self.logger.error("CTP合约查询超时且未发现任何合约")
+                        raise TimeoutError("CTP合约查询超时：请检查网络连接和CTP配置")
 
-            if self.contract_query_complete:
+            if self.contract_query_complete and len(self.discovered_contracts) > 0:
                 self.futures_contracts = self.discovered_contracts.copy()
                 self.logger.info(f"CTP动态发现 {len(self.futures_contracts)} 个期货合约")
                 return self.futures_contracts
             else:
-                self.logger.error("CTP合约查询超时，无法获取合约列表")
-                raise TimeoutError("CTP合约查询超时：请检查网络连接和CTP配置")
+                self.logger.error("合约查询完成但未发现任何合约")
+                raise RuntimeError("未发现任何CTP期货合约")
 
         except Exception as e:
             self.logger.error(f"CTP合约发现失败: {e}")
