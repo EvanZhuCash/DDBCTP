@@ -1,180 +1,380 @@
+#!/usr/bin/env python3
+"""
+DolphinDB Complete Cleanup Script
+
+This script cleans up ALL DolphinDB shared objects, subscriptions, and streaming engines.
+It handles the S03000 error by properly unsubscribing from published tables before cleanup.
+
+Usage: python original_cleanup.py
+"""
+
 import dolphindb as ddb
-import pandas as pd
-import time
+import sys
 
-# Set pandas display options for better output
-pd.set_option('display.max_rows', None)
-pd.set_option('display.max_columns', None)
-pd.set_option('display.width', 1000)
-pd.set_option('display.max_colwidth', None)
-
-def cleanup_ddb(host="localhost", port=8848, username="admin", password="123456"):
-    """
-    Comprehensive DolphinDB cleanup script that combines all cleanup functionality:
-    - Inspects current streaming state
-    - Unsubscribes from all active subscriptions
-    - Drops all stream engines (dynamically discovered)
-    - Undefines all shared tables and variables (dynamically discovered)
-    - Verifies cleanup completion
-
-    Args:
-        host (str): DolphinDB server host (default: "localhost")
-        port (int): DolphinDB server port (default: 8848)
-        username (str): Username (default: "admin")
-        password (str): Password (default: "123456")
-    """
-    s = ddb.session()
+def connect_to_dolphindb(host="192.168.91.124", port=8848, user="admin", password="123456"):
+    """Connect to DolphinDB server"""
     try:
-        print(f"Connecting to DolphinDB at {host}:{port}...")
-        s.connect(host, port, username, password)
-        print("Connected to DolphinDB.")
-
-        # 1. Inspect the current streaming state
-        print("\n--- Current Streaming Publisher Tables ---")
-        try:
-            pub_tables = s.run("getStreamingStat().pubTables")
-            print(pub_tables)
-        except Exception as e:
-            print(f"Could not get publisher tables: {e}")
-            pub_tables = pd.DataFrame()
-
-        print("\n--- Current Streaming Publisher Connections ---")
-        try:
-            pub_conns = s.run("getStreamingStat().pubConns")
-            print(pub_conns)
-        except Exception as e:
-            print(f"Could not get publisher connections: {e}")
-
-        # 2. Skip subscription topics check (function not available in this DolphinDB version)
-
-        print("\n--- Starting Comprehensive Cleanup ---")
-        
-        # 3. Unsubscribe from all active subscriptions (dynamic approach)
-        if not pub_tables.empty:
-            for index, row in pub_tables.iterrows():
-                table_name = row['tableName']
-                actions = row['actions']
-                # Handle both single action and list of actions
-                action_list = actions if isinstance(actions, list) else [actions]
-                for action in action_list:
-                    print(f"Unsubscribing from {table_name} with action {action}")
-                    s.run(f"try {{ unsubscribeTable(tableName='{table_name}', actionName='{action}') }} catch(ex) {{}}")
-
-        # 4. Get all shared tables dynamically and clean them up
-        print("Getting all shared tables...")
-        try:
-            shared_tables = s.run("objs(SHARED)")
-            print(f"Found {len(shared_tables)} shared objects: {list(shared_tables['name']) if not shared_tables.empty else 'None'}")
-        except Exception as e:
-            print(f"Could not get shared tables: {e}")
-            shared_tables = pd.DataFrame()
-
-        # 5. Get all stream engines dynamically using the proper DolphinDB function
-        print("Getting all stream engines...")
-        try:
-            stream_engines = s.run("getStreamEngineList()")
-            if not stream_engines.empty:
-                engine_names = list(stream_engines['engineName'])
-                print(f"Found {len(engine_names)} stream engines: {engine_names}")
-            else:
-                engine_names = []
-                print("No stream engines found.")
-        except Exception as e:
-            print(f"Could not get stream engines via getStreamEngineList: {e}")
-            engine_names = []
-
-        # 6. Execute dynamic cleanup script
-        # Pass the discovered engine names to the DolphinDB script
-        engine_names_str = str(engine_names).replace("'", '"')  # Convert to DolphinDB format
-
-        cleanup_script = f"""
-        // Get all shared tables dynamically
-        sharedObjs = objs(SHARED)
-        if (size(sharedObjs) > 0) {{
-            print("Cleaning up " + string(size(sharedObjs)) + " shared objects...")
-            for (i in 0..(size(sharedObjs)-1)) {{
-                objName = sharedObjs.name[i]
-                objType = sharedObjs.type[i]
-                print("Undefining shared " + objType + ": " + objName)
-                try {{
-                    undef(objName, SHARED)
-                }} catch(ex) {{
-                    print("Failed to undefine " + objName + ": " + ex)
-                }}
-            }}
-        }} else {{
-            print("No shared objects found to clean up.")
-        }}
-
-        // Drop dynamically discovered stream engines
-        discoveredEngines = {engine_names_str}
-        if (size(discoveredEngines) > 0) {{
-            print("Attempting to drop " + string(size(discoveredEngines)) + " discovered stream engines...")
-            for (engine in discoveredEngines) {{
-                try {{
-                    dropStreamEngine(engine)
-                    print("Dropped stream engine: " + engine)
-                }} catch(ex) {{
-                    print("Failed to drop engine " + engine + ": " + ex)
-                }}
-            }}
-        }} else {{
-            print("No stream engines to drop.")
-        }}
-
-        print("Dynamic cleanup completed.")
-        """
-        
-        print("Executing comprehensive cleanup script...")
-        s.run(cleanup_script)
-        print("Cleanup script executed successfully.")
-        
-        # 5. Verify cleanup completion
-        print("\n--- Verifying Cleanup ---")
-        try:
-            pub_tables_after = s.run("getStreamingStat().pubTables")
-            if pub_tables_after.empty:
-                print("✅ All publisher tables have been cleared successfully.")
-            else:
-                print("⚠️  Some publisher tables still exist:")
-                print(pub_tables_after)
-        except Exception as e:
-            print(f"Could not verify publisher tables: {e}")
-        
-        # Skip subscription topics verification (function not available)
-    
+        session = ddb.session()
+        session.connect(host, port, user, password)
+        print(f"✅ Connected to DolphinDB at {host}:{port}")
+        return session
     except Exception as e:
-        print(f"\n❌ An error occurred during cleanup: {e}")
-    
-    finally:
+        print(f"❌ Failed to connect to DolphinDB: {e}")
+        return None
+
+def cleanup_published_tables(session):
+    """Clean up published tables and their subscriptions to fix S03000 error"""
+    print("\n🔍 Cleaning up published tables and subscriptions...")
+
+    total_cleaned = 0
+
+    try:
+        # Get published tables - this is the key to fixing S03000 error
+        pub_tables = session.run("getStreamingStat().pubTables")
+
+        if pub_tables is not None and not pub_tables.empty:
+            print(f"  Found {len(pub_tables)} published tables")
+
+            # Process each published table
+            for _, row in pub_tables.iterrows():
+                table_name = row.get('tableName', '')
+                subscriber = row.get('subscriber', '')
+                actions = row.get('actions', '')
+
+                if table_name:
+                    print(f"    📋 Table: {table_name}")
+                    if subscriber:
+                        print(f"       Subscriber: {subscriber}")
+                    if actions:
+                        print(f"       Actions: {actions} (type: {type(actions)})")
+
+                    # Try multiple unsubscribe methods
+                    unsubscribe_methods = []
+
+                    # If we have specific actions, try to unsubscribe each one
+                    if actions and isinstance(actions, list):
+                        print(f"       📝 Processing as list with {len(actions)} actions")
+                        for action in actions:
+                            unsubscribe_methods.append(f'unsubscribeTable(tableName=`{table_name}, actionName="{action}")')
+                    elif actions and isinstance(actions, str):
+                        # Handle string representation of list like "[action1,action2]"
+                        if actions.startswith('[') and actions.endswith(']'):
+                            action_list = actions[1:-1].split(',')
+                            print(f"       📝 Processing as string list: {action_list}")
+                            for action in action_list:
+                                action = action.strip()
+                                print(f"          Adding action: '{action}'")
+                                unsubscribe_methods.append(f'unsubscribeTable(tableName=`{table_name}, actionName="{action}")')
+                        else:
+                            print(f"       📝 Processing as single string action")
+                            unsubscribe_methods.append(f'unsubscribeTable(tableName=`{table_name}, actionName="{actions}")')
+
+                    # Always try universal unsubscribe as fallback
+                    unsubscribe_methods.append(f'unsubscribeTable(tableName=`{table_name})')
+                    print(f"       📋 Total unsubscribe methods to try: {len(unsubscribe_methods)}")
+
+                    # Execute all specific action unsubscribes first
+                    success_count = 0
+                    for method in unsubscribe_methods[:-1]:  # All except the universal fallback
+                        try:
+                            print(f"       🔧 Trying: {method}")
+                            session.run(method)
+                            print(f"       ✓ SUCCESS: {method}")
+                            total_cleaned += 1
+                            success_count += 1
+                        except Exception as e:
+                            error_msg = str(e)
+                            print(f"       ❌ FAILED: {method}")
+                            print(f"          Error: {error_msg}")
+                            if "doesn't exist" not in error_msg.lower():
+                                print(f"       ⚠ Method failed with unexpected error")
+
+                    # Try universal unsubscribe as final fallback if any specific ones failed
+                    if success_count < len(unsubscribe_methods) - 1:
+                        try:
+                            universal_method = unsubscribe_methods[-1]
+                            print(f"       🔧 Trying universal fallback: {universal_method}")
+                            session.run(universal_method)
+                            print(f"       ✓ SUCCESS: {universal_method}")
+                            total_cleaned += 1
+                        except Exception as e:
+                            error_msg = str(e)
+                            print(f"       ❌ FAILED: {universal_method}")
+                            print(f"          Error: {error_msg}")
+        else:
+            print("  ✅ No published tables found")
+
+        # Try to unsubscribe from all remaining published tables
         try:
-            s.close()
-            print("\n🔌 Connection closed.")
+            remaining_pub_tables = session.run("getStreamingStat().pubTables")
+            if remaining_pub_tables is not None and not remaining_pub_tables.empty:
+                for _, row in remaining_pub_tables.iterrows():
+                    table_name = row.get('tableName', '')
+                    if table_name:
+                        try:
+                            session.run(f'unsubscribeTable(tableName=`{table_name})')
+                            print(f"  ✓ Final unsubscribe attempt: {table_name}")
+                            total_cleaned += 1
+                        except Exception as e:
+                            print(f"  ⚠ Final unsubscribe failed for {table_name}: {str(e)[:50]}...")
+        except Exception as e:
+            print(f"  ⚠ Could not perform final unsubscribe attempts: {e}")
+
+    except Exception as e:
+        print(f"❌ Error cleaning published tables: {e}")
+
+    return total_cleaned
+
+def cleanup_streaming_engines(session):
+    """Clean up streaming engines"""
+    print("\n🔍 Cleaning up streaming engines...")
+
+    total_removed = 0
+
+    try:
+        engines = session.run("getStreamEngineStat()")
+        if engines is not None:
+            # Handle dict result from getStreamEngineStat()
+            if isinstance(engines, dict):
+                total_engines = 0
+                engine_iterator = []
+
+                for engine_type, engine_df in engines.items():
+                    if engine_df is not None and hasattr(engine_df, 'empty') and not engine_df.empty:
+                        total_engines += len(engine_df)
+                        for _, engine_row in engine_df.iterrows():
+                            engine_iterator.append((None, engine_row))
+
+                if total_engines > 0:
+                    print(f"  Found {total_engines} streaming engines")
+                else:
+                    print("  ✅ No streaming engines found")
+                    engine_iterator = []
+            elif hasattr(engines, 'empty') and not engines.empty:
+                print(f"  Found {len(engines)} streaming engines")
+                engine_iterator = engines.iterrows()
+            else:
+                print("  ✅ No streaming engines found")
+                engine_iterator = []
+
+            for _, engine in engine_iterator:
+                # Try different ways to get engine name
+                engine_name = ""
+                if hasattr(engine, 'get'):
+                    engine_name = engine.get('name', '') or engine.get('engineName', '')
+                elif hasattr(engine, 'name'):
+                    engine_name = getattr(engine, 'name', '')
+                elif isinstance(engine, dict):
+                    engine_name = engine.get('name', '') or engine.get('engineName', '')
+
+                if engine_name:
+                    try:
+                        session.run(f'dropStreamEngine("{engine_name}")')
+                        print(f"    ✓ Dropped engine: {engine_name}")
+                        total_removed += 1
+                    except Exception as e:
+                        print(f"    ✗ Failed to drop {engine_name}: {e}")
+                else:
+                    print(f"    ⚠ Could not extract engine name from: {type(engine)} - {engine}")
+        else:
+            print("  ✅ No streaming engines found")
+
+    except Exception as e:
+        print(f"  ⚠ Could not check streaming engines (may not be supported): {e}")
+
+    return total_removed
+
+def cleanup_shared_objects(session):
+    """Clean up all shared objects"""
+    print("\n🔍 Cleaning up shared objects...")
+
+    total_removed = 0
+    failed_objects = []
+
+    try:
+        shared_objects = session.run("objs(true)")
+
+        if shared_objects is None or shared_objects.empty:
+            print("  ✅ No shared objects found")
+            return total_removed, failed_objects
+
+        print(f"  Found {len(shared_objects)} shared objects")
+
+        # System objects that should not be undefined
+        system_objects = {
+            'login', 'logout', 'getUserAccess', 'grant', 'deny', 'revoke',
+            'getSessionMemoryStat', 'getClusterPerf', 'getStreamingStat',
+            'objs', 'undef', 'share', 'clearAllCache', 'gc',
+            'console', 'web', 'streaming', 'system'
+        }
+
+        for _, row in shared_objects.iterrows():
+            obj_name = row.get('name', '')
+            obj_type = row.get('type', 'Unknown')
+
+            if not obj_name:
+                continue
+
+            # Skip system objects
+            if obj_name in system_objects:
+                print(f"    ⏭️ Skipping system object: {obj_name}")
+                continue
+
+            # Skip system internals
+            if (obj_name.startswith('__') or obj_name.startswith('sys_') or
+                obj_name.startswith('ddb_') or obj_name.startswith('_system')):
+                print(f"    ⏭️ Skipping system internal: {obj_name}")
+                continue
+
+            try:
+                session.run(f'undef(`{obj_name}, SHARED)')
+                print(f"    ✓ Removed: {obj_name} ({obj_type})")
+                total_removed += 1
+
+            except Exception as e:
+                error_msg = str(e).lower()
+
+                if "doesn't exist" in error_msg or "not defined" in error_msg:
+                    print(f"    ⚠ Already undefined: {obj_name}")
+                elif "cancel all subscriptions" in error_msg or "subscription" in error_msg:
+                    print(f"    🔒 Has active subscriptions: {obj_name} ({obj_type})")
+                    failed_objects.append((obj_name, "active subscriptions", obj_type))
+                else:
+                    print(f"    ✗ Failed to remove {obj_name} ({obj_type}): {e}")
+                    failed_objects.append((obj_name, str(e)[:50], obj_type))
+
+        print(f"  ✅ Removed {total_removed} shared objects")
+        if failed_objects:
+            print(f"  ⚠️ {len(failed_objects)} objects could not be removed")
+
+    except Exception as e:
+        print(f"❌ Error in shared object cleanup: {e}")
+
+    return total_removed, failed_objects
+
+def show_final_status(session):
+    """Show final cleanup status"""
+    print("\n" + "="*50)
+    print("FINAL STATUS")
+    print("="*50)
+
+    try:
+        # Check remaining shared objects
+        shared_objects = session.run("objs(true)")
+        if shared_objects is None or shared_objects.empty:
+            print("✅ SHARED OBJECTS: None remaining")
+        else:
+            print(f"⚠️ SHARED OBJECTS: {len(shared_objects)} remaining")
+            for _, row in shared_objects.iterrows():
+                obj_name = row.get('name', 'Unknown')
+                obj_type = row.get('type', 'Unknown')
+                print(f"    {obj_name} ({obj_type})")
+
+        # Check remaining published tables
+        try:
+            pub_tables = session.run("getStreamingStat().pubTables")
+            if pub_tables is None or pub_tables.empty:
+                print("✅ PUBLISHED TABLES: None remaining")
+            else:
+                print(f"⚠️ PUBLISHED TABLES: {len(pub_tables)} remaining")
         except:
-            print("\n⚠️  Failed to close connection.")
-        
-        # Brief pause to ensure cleanup completion
-        time.sleep(1)
+            print("⚠️ PUBLISHED TABLES: Could not check")
+
+        # Check streaming engines
+        try:
+            engines = session.run("getStreamEngineStat()")
+            if engines is None:
+                print("✅ STREAMING ENGINES: None remaining")
+            elif isinstance(engines, dict):
+                total_engines = 0
+                engine_names = []
+
+                for engine_type, engine_df in engines.items():
+                    if engine_df is not None and hasattr(engine_df, 'empty') and not engine_df.empty:
+                        total_engines += len(engine_df)
+                        for _, engine_row in engine_df.iterrows():
+                            engine_name = ""
+                            if hasattr(engine_row, 'get'):
+                                engine_name = engine_row.get('name', '') or engine_row.get('engineName', '')
+                            elif hasattr(engine_row, 'name'):
+                                engine_name = getattr(engine_row, 'name', '')
+                            if engine_name:
+                                engine_names.append(engine_name)
+
+                if total_engines > 0:
+                    print(f"⚠️ STREAMING ENGINES: {total_engines} remaining")
+                    for name in engine_names:
+                        print(f"    - {name}")
+                else:
+                    print("✅ STREAMING ENGINES: None remaining")
+            elif hasattr(engines, 'empty') and not engines.empty:
+                print(f"⚠️ STREAMING ENGINES: {len(engines)} remaining")
+            else:
+                print("✅ STREAMING ENGINES: None remaining")
+        except Exception as e:
+            print(f"⚠️ STREAMING ENGINES: Could not check ({e})")
+
+    except Exception as e:
+        print(f"❌ Error checking final status: {e}")
+
+def main():
+    """Main cleanup function - simplified with no complex options"""
+    print("🚀 DolphinDB Complete Cleanup")
+    print("="*50)
+
+    # Connect to DolphinDB
+    session = connect_to_dolphindb()
+    if not session:
+        sys.exit(1)
+
+    try:
+        total_operations = 0
+
+        # Step 1: Clean published tables first (critical for fixing S03000 error)
+        total_operations += cleanup_published_tables(session)
+
+        # Step 2: Clean streaming engines
+        total_operations += cleanup_streaming_engines(session)
+
+        # Step 3: Clean shared objects
+        removed, failed = cleanup_shared_objects(session)
+        total_operations += removed
+
+        # Step 4: Clear caches and garbage collect
+        print("\n🧹 Final cleanup...")
+        try:
+            session.run("clearAllCache()")
+            print("  ✓ Cleared all caches")
+            total_operations += 1
+        except Exception as e:
+            print(f"  ⚠ Could not clear caches: {e}")
+
+        # Note: gc() function not available in this DolphinDB version
+        print("  ℹ️ Garbage collection skipped (not supported in this version)")
+
+        # Show final status
+        show_final_status(session)
+
+        print(f"\n🎉 CLEANUP COMPLETE: {total_operations} operations performed")
+
+        # Show remaining issues if any
+        if failed:
+            print(f"\n⚠️ {len(failed)} objects could not be cleaned:")
+            for obj_name, reason, obj_type in failed[:5]:  # Show first 5
+                print(f"  - {obj_name} ({obj_type}): {reason}")
+            if len(failed) > 5:
+                print(f"  ... and {len(failed) - 5} more")
+            print("\n💡 If objects remain with 'active subscriptions' error:")
+            print("   This indicates the S03000 error - published tables with phantom subscriptions")
+            print("   Solution: Restart DolphinDB server to clear phantom locks")
+        else:
+            print("\n✅ All objects cleaned successfully!")
+
+    except Exception as e:
+        print(f"❌ Error during cleanup: {e}")
+    finally:
+        session.close()
+
 
 if __name__ == "__main__":
-    import sys
-
-    # Parse command line arguments for connection parameters
-    host = "localhost"
-    port = 8848
-    username = "admin"
-    password = "123456"
-
-    # Simple argument parsing
-    if len(sys.argv) > 1:
-        host = sys.argv[1]
-    if len(sys.argv) > 2:
-        port = int(sys.argv[2])
-    if len(sys.argv) > 3:
-        username = sys.argv[3]
-    if len(sys.argv) > 4:
-        password = sys.argv[4]
-
-    print(f"🚀 Starting cleanup with connection: {username}@{host}:{port}")
-    cleanup_ddb(host, port, username, password)
-    print("\n🎉 Cleanup process completed!")
+    main()
