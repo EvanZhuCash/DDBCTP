@@ -1,0 +1,94 @@
+module FuturesOLHC::createTable
+use FuturesOLHC::tableSchema
+
+// 商品期货库表
+def createComdtyFuturesDfs(dbName, tbName){
+    if(!existsDatabase(dbUrl=dbName)){
+        db1 = database(, VALUE, 2023.01.01..2023.01.02)
+        db2 = database(, HASH, [SYMBOL, 5])
+        database(dbName, COMPO, [db1, db2], , "TSDB")
+        print(dbName + " created successfully.")
+    }
+    db = database(dbName)
+	sche = createComdtyRawTable().schema().colDefs
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=table(100:0, sche.name, sche.typeString), tableName=tbName, partitionColumns=`tradeTime`InstruID , sortColumns = `InstruID `tradeTime, sortKeyMappingFunction = [hashBucket{, 499}])
+        print(tbName + " created successfully.")
+    }
+}
+
+def createComdtyFuturesMinDfs(dbName, tbName){
+    if(!existsDatabase(dbUrl=dbName)){
+        database(dbName, VALUE, 2020.01M..2024.12M)
+        print(dbName + " created successfully.")
+    }
+    db = database(dbName)
+	colNames = `ClearingDay`TradeDay`InstruID `Code`Market`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`Volume`Value`Vwap`OpenInt`PreSetPrice`SetPrice`ULimitPrice`LLimitPrice`PreCloPrice`SystemTime
+	colTypes = [DATE, DATE, SYMBOL,STRING, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,TIMESTAMP]
+	schemaTable = table(1:0, colNames, colTypes)
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=schemaTable, tableName=tbName, partitionColumns=`ClearingDay)
+        print(tbName + " created successfully.")
+    }
+}
+
+def createComdtyFuturesZlDfs(dbName, tbName) {
+	if(!existsDatabase(dbUrl=dbName)){
+        database(dbName, VALUE, 2020.01M..2024.12M)
+        print(dbName + " created successfully.")
+	}
+    db = database(dbName)
+	colNames = `ClearingDay`TradeDay`Market`mainID`InstruID `nextContractID`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`SetPrice`ULimitPrice`LLimitPrice`Volume`Value`OpenInt`PreSetPrice`PreCloPrice`backwardFactor`forwardFactor`backwardFactorClosePrice`backwardFactorOpenPrice`backwardFactorHighPrice`backwardFactorLowPrice`forwardFactorClosePrice`forwardFactorOpenPrice`forwardFactorHighPrice`forwardFactorLowPrice`SystemTime
+	colTypes = [DATE, DATE, SYMBOL,SYMBOL, SYMBOL, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE,DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,TIMESTAMP]
+	schemaTable = table(1:0, colNames, colTypes)
+    
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=schemaTable, tableName=tbName, partitionColumns=`ClearingDay)
+        print(tbName + " created successfully.")
+    }    
+}
+
+//国债期货库表
+def createRtFuturesDfs(dbName, tbName){
+    if(!existsDatabase(dbUrl=dbName)){
+        database(dbName, VALUE, 2023.01.01..2023.01.02, , "TSDB")
+        print(dbName + " created successfully.")
+    }
+    db = database(dbName)
+    sche = createRTRawTable().schema().colDefs
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=table(100:0, sche.name, sche.typeString), tableName=tbName, partitionColumns=`tradeTime, sortColumns = `InstruID `tradeTime, sortKeyMappingFunction = [hashBucket{, 499}])
+        print(tbName + " created successfully.")
+    }
+}
+
+def createRtFuturesMinDfs(dbName, tbName){
+    if(!existsDatabase(dbUrl=dbName)){
+        database(dbName, RANGE, [2000.01.01,2010.01.01,2020.01.01,2030.01.01,2040.01.01]$DATE)
+        print(dbName + " created successfully.")
+	}
+    db = database(dbName)
+	colNames = `ClearingDay`TradeDay`InstruID `Code`Market`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`Volume`Value`Vwap`OpenInt`PreSetPrice`SetPrice`ULimitPrice`LLimitPrice`PreCloPrice`SystemTime
+	colTypes = [DATE, DATE, SYMBOL,STRING, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,TIMESTAMP]
+	schemaTable = table(1:0, colNames, colTypes)
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=schemaTable, tableName=tbName, partitionColumns=`ClearingDay)
+        print(tbName + " created successfully.")
+    }
+}
+
+def createRtFuturesZlDfs(dbName, tbName){
+	if(!existsDatabase(dbUrl=dbName)){
+        database(dbName, RANGE, [2000.01.01,2010.01.01,2020.01.01,2030.01.01,2040.01.01]$DATE)
+        print(dbName + " created successfully.")
+	}
+    db = database(dbName)
+	colNames = `ClearingDay`TradeDay`Market`mainID`InstruID`nextContractID`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`SetPrice`ULimitPrice`LLimitPrice`Volume`Value`OpenInt`PreSetPrice`PreCloPrice`backwardFactor`forwardFactor`backwardFactorClosePrice`backwardFactorOpenPrice`backwardFactorHighPrice`backwardFactorLowPrice`forwardFactorClosePrice`forwardFactorOpenPrice`forwardFactorHighPrice`forwardFactorLowPrice`SystemTime
+	colTypes = [DATE, DATE, SYMBOL,SYMBOL, SYMBOL, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE,DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,TIMESTAMP]
+	schemaTable = table(1:0, colNames, colTypes)
+    if(!existsTable(dbName, tbName)){
+        db.createPartitionedTable(table=schemaTable, tableName=tbName, partitionColumns=`ClearingDay)
+        print(tbName + " created successfully.")
+    }
+}
+

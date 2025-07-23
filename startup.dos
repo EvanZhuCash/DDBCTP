@@ -1,0 +1,214 @@
+use ops
+
+
+/* 
+step1: 登录账户，以下为默认的管理员账号 
+*/
+login("admin", "123456")
+
+/* 加载插件 */
+// listRemotePlugins()
+// installPlugin("ctp")
+try{ loadPlugin("ctp") }catch(ex){print ex} 
+go
+
+/* 
+相关函数定义 
+*/
+// 打印运行日志
+def ctpLog(funcName, msg, isError=false){
+    if(!isError) {
+        formattedMsg = stringFormat("<ctp>::<" + funcName + ">:" + "%W", msg)
+        writeLog(formattedMsg)
+    }
+    else{
+        formattedMsg = stringFormat("[ERROR]<ctp>::<" + funcName + ">:" + "%W", msg)
+        writeLogLevel(ERROR, formattedMsg)
+    }
+    print(formattedMsg)
+}
+
+// 创建 ctp 连接函数
+def ctpConn(ip, port, config){
+    conn = NULL
+    try {
+        conn = ctp::connect(ip, port, config)
+        ctpLog(funcName="ctpConn", msg="create connection successed", isError=false)
+    } catch (ex) {
+        ctpLog(funcName="ctpConn", msg=ex, isError=true)
+        ctpLog(funcName="ctpConn", msg="create connection failed", isError=true)
+    }
+    return conn
+}
+
+// 清理环境函数
+def ctpCleanEnvironment(ctpSubTBName, stdStreamTBName){
+    // 清理原始数据环境
+    unsubscribeAll(tbName=ctpSubTBName)
+    dropStreamTable(ctpSubTBName, force=true)
+    // 清理标准化数据环境
+    unsubscribeAll(tbName=stdStreamTBName)
+    dropStreamTable(stdStreamTBName, force=true)
+}
+
+// 创建原始行情流表函数
+def ctpSubToStreamTB(conn, ctpSubType, ctpSubTBName, marketTBCapacity){
+    tb = ctp::getSchema(conn, ctpSubType)  
+    enableTableShareAndPersistence(
+            table=streamTable(marketTBCapacity:0, tb.name, tb.typeString), 
+            tableName=ctpSubTBName,
+            cacheSize=marketTBCapacity,
+            preCache=0)
+}
+
+// 创建标准化流表函数
+def ctpStdTB(stdStreamTBName, stdDestDBName, stdDestTBName, marketTBCapacity){
+    colNames = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.name
+    colTypes = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.typeString
+    try{
+        tb = streamTable(marketTBCapacity:0, colNames, colTypes)
+        enableTableShareAndPersistence(table=tb, tableName=stdStreamTBName,cacheSize=marketTBCapacity,preCache=0)
+        setStreamTableFilterColumn(objByName(stdStreamTBName), `unified_code)
+    }catch(ex){
+        print(ex)
+    }
+}
+
+// ctp 订阅函数
+def ctpSub(conn, ctpSubType, ctpSubTBName, ids){
+    try {
+        ctp::subscribe(conn, ctpSubType, objByName(ctpSubTBName), ids);
+        ctpLog(funcName="ctpSub", msg= ctpSubType + " sub successed", isError=false)
+    } catch (ex) {
+        ctpLog(funcName="ctpSub", msg=ex, isError=true)
+        ctpLog(funcName="ctpSub", msg=ctpSubType + " sub failed", isError=true)
+    }
+}
+
+// 数据标准化函数
+def ctpMarketHandler(msg, stdStreamTBName, 
+                    startTime1=20:40:00.000, endTime1=03:00:00.000, 
+                    startTime2=08:40:00.000, endTime2=15:30:00.000) {
+    tmp = select * from objByName("basicInfoTable")
+    // 按照数据时间和接收时间过滤数据
+    temp = select * from msg
+                where ((tradeTime>=startTime1 or tradeTime<=endTime1) and (time(receivedTime)>=startTime1 or time(receivedTime)<=endTime1))
+                or ((tradeTime>=startTime2 and tradeTime<=endTime2) and (time(receivedTime)>=startTime2 and time(receivedTime)<=endTime2))
+    // 关联交易所信息，并处理数据格式
+    ctpProcess = select
+                    TradingDay as trade_date,
+                    tmp.exchange as exchange_id,
+                    iif(tmp.exchange!=NULL, temp.InstrumentID + "." + tmp.exchange, temp.InstrumentID) as unified_code,
+                    LastPrice as last_price,
+                    PreSettlementPrice as pre_settlement_price,
+                    PreClosePrice as pre_close_price,
+                    PreOpenInterest as pre_open_price,
+                    OpenPrice as open_price,
+                    HighestPrice as high_price,
+                    LowestPrice as low_price,
+                    Volume as volume,
+                    Turnover as turnover,
+                    OpenInterest as open_interest,
+                    ClosePrice as close_price,
+                    SettlementPrice as settlement_price,
+                    (LastPrice-PreSettlementPrice)\PreSettlementPrice as change_rate,
+                    UpperLimitPrice as upper_limit_price,
+                    LowerLimitPrice as lower_limit_price,
+                    PreDelta as pre_delta,
+                    CurrDelta as current_delta,
+                    UpdateTime as update_time,
+                    UpdateMillisec as update_ms,
+                    fixedLengthArrayVector(BidPrice1, BidPrice2, BidPrice3, BidPrice4, BidPrice5)as bid_price,
+                    fixedLengthArrayVector(BidVolume1, BidVolume2, BidVolume3, BidVolume4, BidVolume5) as bid_volume,
+                    fixedLengthArrayVector(AskPrice1, AskPrice2, AskPrice3, AskPrice4, AskPrice5) as ask_price,
+                    fixedLengthArrayVector(AskVolume1, AskVolume2, AskVolume3, AskVolume4, AskVolume5) as ask_volume,
+                    AveragePrice as avgerage_price,
+                    ActionDay as action_date,
+                    InstrumentID as ticker,
+                    ExchangeInstID as exchange_inst_id,
+                    BandingUpperPrice as banding_upper_price,
+                    BandingLowerPrice as banding_lower_price,
+                    tradeTime as data_time
+                from lj(temp, tmp, `InstrumentID, `trade_code)
+    // 更新交易日期和实际日期
+    update ctpProcess set action_date=temporalAdd(trade_date, -1, `DCE) where data_time>=startTime1 and exchange_id="DCE"
+    update ctpProcess set action_date=temporalAdd(trade_date, -1, `DCE)+1 where data_time<=endTime1 and exchange_id="DCE" 
+    update ctpProcess set trade_date=temporalAdd(trade_date, 1, `CZCE) where data_time>=startTime1 and exchange_id="CZC" 
+    objByName(stdStreamTBName).append!(ctpProcess)
+}
+
+// 主函数
+def main(){
+    ctpLog(funcName="mainFuc", msg="ctp服务开始执行", isError=false)
+    /**=================ctp服务模块1-配置参数-开始======================**/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块1-配置参数开始执行.", isError=false)
+    // ctp 连接配置
+    ip = "111.111.111.11"
+    port = 11111
+    ip = "180.168.146.187"
+    port = 10010
+    ip = "180.169.112.54"
+    port = 42213
+    config={
+        "OutputElapsed": true,
+        "ReceivedTime": true,
+        "ConcatTime": true
+    }
+    // 获取需要订阅的合约范围，路径需根据实际情况进行修改
+    tmp = select trade_code, exchange from loadText("./future_basic.csv")
+    share(tmp, "basicInfoTable")
+    ids = exec distinct trade_code from tmp
+
+    // 原始数据流数据表配置
+    marketTBCapacity=2000000    // 行情数据的流表预分配大小，表示流数据表在内存中最多保留多少行
+    ctpSubType = "marketData"
+    ctpSubTBName = "ctpMarketDataStream"
+
+    // 原始数据标准化后入库配置
+    stdStreamTBName = "ctpMarketStream"
+    stdDestDBName = "dfs://ctp_market_data"
+    stdDestTBName = "ctp_market"
+    ctpLog(funcName="mainFuc", msg="ctp服务模块1-配置参数完成执行.", isError=false)
+    /**=================ctp服务模块1-配置参数-结束======================**/
+
+    /**=================ctp服务模块2-清理环境-开始======================**/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块2-清理环境开始执行.", isError=false)
+    ctpCleanEnvironment(ctpSubTBName, stdStreamTBName)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块2-清理环境完成执行.", isError=false)
+    /**=================ctp服务模块2-清理环境-结束======================**/
+
+    /**==================ctp服务模块3-原始行情订阅入库-开始=======================**/
+    /*====================step1-建立 ctp 连接============================*/  
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step1-建立CTP连接开始执行.", isError=false)
+    conn = ctpConn(ip, port, config)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step1-建立CTP连接完成执行.", isError=false)
+    /*====================step2-创建原始行情流表============================*/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step2-创建原始行情流表开始执行.", isError=false)
+    ctpSubToStreamTB(conn, ctpSubType, ctpSubTBName, marketTBCapacity)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step2-创建原始行情流表完成执行.", isError=false)
+    /*====================step3-创建标准化流表============================*/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step3-创建标准化流表和分区内存表开始执行.", isError=false)
+    ctpStdTB(stdStreamTBName, stdDestDBName, stdDestTBName, marketTBCapacity)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step3-创建标准化流表和分区内存表完成执行.", isError=false)
+    /*====================step4-订阅原始行情表标准化处理============================*/  
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step4-订阅原始行情表标准化处理开始执行.", isError=false)
+    subscribeTable(tableName=ctpSubTBName, actionName=ctpSubTBName + "Std", offset=-1, handler=ctpMarketHandler{, stdStreamTBName}, msgAsTable=true, batchSize=10000, throttle=0.001, hash=0, reconnect=true)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step4-订阅原始行情表标准化处理完成执行.", isError=false)    
+    /*====================step5-标准化流表数据落库============================*/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step5-标准化流表数据落库开始执行.", isError=false)
+    subscribeTable(tableName=stdStreamTBName, actionName=stdStreamTBName + "ToDfs", offset=-1, handler=loadTable(stdDestDBName, stdDestTBName), msgAsTable=true, batchSize=5000, throttle=1, hash=1, reconnect=true)			
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step5-标准化流表数据落库完成执行.", isError=false)
+    /*====================step6-建立ctp订阅============================*/
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step6-建立ctp订阅开始执行.", isError=false)
+    ctpSub(conn, ctpSubType, ctpSubTBName, ids)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-step6-建立ctp订阅完成执行.", isError=false)
+    ctpLog(funcName="mainFuc", msg="ctp服务模块3-原始行情订阅入库完成执行.", isError=false)
+    /**==================ctp服务模块3-原始行情订阅入库-结束=======================**/
+    ctpLog(funcName="mainFuc", msg="ctp服务完成执行", isError=false)
+}
+
+
+/* 
+执行主函数，实现 datafeed 数据实时接入
+*/
+main()

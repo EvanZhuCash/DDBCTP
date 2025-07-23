@@ -14,17 +14,16 @@ logger.addHandler(file_handler)
 from vnpy_ctp.api import MdApi
 from vnpy.trader.utility import get_folder_path
 
-ctp_setting = {
-    "用户名": "2520000355",
-    "密码": "jacky83611",
-    "经纪商代码": "4040",
-    "交易服务器": "180.166.103.21:55205",
-    "行情服务器": "180.166.103.21:55213",
-    "产品名称": "client_LO_1.0",
-    "授权编码": "IM53ZG1HKVEYHPAI",
+{
+    "用户名": "224829",
+    "密码": "Evan@cash1q2",
+    "经纪商代码": "9999",
+    "交易服务器": "182.254.243.31:30001",
+    "行情服务器": "182.254.243.31:30011",
+    "产品名称": "simnow_client_test",
+    "授权编码": "0000000000000000",
     "产品信息": ""
 }
-
 # Map to English keys for ctp::queryInstrument
 md_server, md_port = ctp_setting["行情服务器"].split(":")
 ctp_settings = {

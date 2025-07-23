@@ -1,0 +1,60 @@
+module FuturesOLHC::tableSchema
+
+/* ------------------------------------------  商品期货  ---------------------------------------------------------------------- */
+def createComdtyRawTable(){
+    colNames = ['tradeTime', 'instruID', 'market', 'preCloPrice', 'openPrice', 'highPrice', 'lowPrice', 'lastPrice', 'volume', 'turnover', 'preOpenInt', 'OpenInt', 'preSetPrice', 'SetPrice', 'ULimitPrice', 'LLimitPrice']
+    colTypes = ['TIMESTAMP', 'SYMBOL', 'SYMBOL', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'LONG', 'DOUBLE', 'LONG', 'LONG', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE']
+    return streamTable(1:0, colNames, colTypes)
+}
+
+
+def createComdtyRSETable(){
+    colNames = ["instruID","ClearingDay","tradeDay","tradeTime","market","openPrice","highPrice","lowPrice","lastPrice","volume","turnover","OpenInt","preOpenInt","preSetPrice","preCloPrice","ULimitPrice","LLimitPrice","deltas_high","deltas_low","deltas_trd_vol","deltas_trd_tovr"]
+    colTypes = [SYMBOL,DATE,DATE,TIMESTAMP,SYMBOL,DOUBLE,DOUBLE,DOUBLE,DOUBLE,LONG,DOUBLE,LONG,LONG,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE]
+    return streamTable(100:0, colNames, colTypes)
+}
+
+def createComdtyTSETable(){
+    colNames = ["tradeTime","instruID","market","ClearingDay","tradeDay","openPrice","highPrice","lowPrice","closePrice","volume","turnover","DVolume","DTurnover","openInt","preSetPrice","preCloPrice","ULimitPrice","LLimitPrice"]
+    colTypes = [TIMESTAMP,SYMBOL,SYMBOL,DATE,DATE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,LONG,DOUBLE,LONG,DOUBLE,LONG,DOUBLE,DOUBLE,DOUBLE,DOUBLE]
+    return streamTable(100:0, colNames, colTypes)
+}
+
+def createComdtyFinalTable(){
+    colNames = `ClearingDay`TradeDay`InstruID`Code`Market`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`Volume`Value`Vwap`OpenInt`PreSetPrice`SetPrice`ULimitPrice`LLimitPrice`PreClosePrice`SystemTime
+    colTypes = [DATE, DATE, SYMBOL,STRING, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, TIMESTAMP]
+    return keyedStreamTable(`TradeDay`BarTime`InstruID, 100:0, colNames,colTypes)
+}
+
+def createComdtyZLTable(){
+    colNames = `TradeDay`ActionDay`Market`mainID`InstruID`nextContractID`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`SetPrice`ULimitPrice`LLimitPrice`Volume`Value`OpenInt`PreSetPrice`PreClosePrice`backwardFactor`forwardFactor`backwardFactorClosePrice`backwardFactorOpenPrice`backwardFactorHighPrice`backwardFactorLowPrice`forwardFactorClosePrice`forwardFactorOpenPrice`forwardFactorHighPrice`forwardFactorLowPrice`Systemtime
+    colTypes = [DATE, DATE, SYMBOL,SYMBOL, SYMBOL, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE,DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE,  TIMESTAMP]
+    return streamTable(100:0, colNames,colTypes)
+}
+
+/* ----------------------------------------------------  国债期货  -------------------------------------------------------- */
+
+def createRTRawTable(){
+    colNames = ['tradeTime', 'instruID', 'market', 'preCloPrice', 'openPrice', 'highPrice', 'lowPrice', 'lastPrice', 'volume', 'turnover', 'preOpenInt', 'OpenInt', 'preSetPrice', 'SetPrice', 'ULimitPrice', 'LLimitPrice']
+    colTypes = ['TIMESTAMP', 'SYMBOL', 'SYMBOL', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'LONG', 'DOUBLE', 'LONG', 'LONG', 'DOUBLE', 'DOUBLE', 'DOUBLE', 'DOUBLE']
+    return streamTable(1:0, colNames, colTypes)
+}
+
+def createRTRSETable(){
+    colNames = ["instruID","ClearingDay","tradeDay","tradeTime","market","openPrice","highPrice","lowPrice","lastPrice","volume","turnover","OpenInt","preOpenInt","preSetPrice","preCloPrice","ULimitPrice","LLimitPrice","deltas_high","deltas_low","deltas_trd_vol","deltas_trd_tovr"]
+    colTypes = [SYMBOL,DATE,DATE,TIMESTAMP,SYMBOL,DOUBLE,DOUBLE,DOUBLE,DOUBLE,LONG,DOUBLE,LONG,LONG,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,DOUBLE]
+    return streamTable(1:0, colNames, colTypes)
+}
+
+def createRTTSETable(){
+    colNames = ["tradeTime","instruID","tradeDay","openPrice","highPrice","lowPrice","closePrice","volume","turnover","DVolume","DTurnover","openInt","preSetPrice","preCloPrice","ULimitPrice","LLimitPrice"]
+    colTypes = [TIMESTAMP,SYMBOL,DATE,DOUBLE,DOUBLE,DOUBLE,DOUBLE,LONG,DOUBLE,LONG,DOUBLE,LONG,DOUBLE,DOUBLE,DOUBLE,DOUBLE]
+    return streamTable(1:0, colNames, colTypes)
+}
+
+def createRTFinalTable(){
+    colNames = `ClearingDay`tradeDay`InstruID`Code`Market`BarTime`ClosePrice`OpenPrice`HighPrice`LowPrice`Volume`Value`Vwap`OpenInt`PreSetPrice`SetPrice`ULimitPrice`LLimitPrice`PreClosePrice`SystemTime
+    colTypes = [DATE, DATE, SYMBOL,STRING, SYMBOL, TIME, DOUBLE, DOUBLE, DOUBLE, DOUBLE, LONG, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, TIMESTAMP]
+    return keyedStreamTable(`tradeDay`BarTime`InstruID, 100:0, colNames,colTypes)
+}
+

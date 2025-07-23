@@ -1,0 +1,285 @@
+module FuturesOLHC::streamFrame
+use FuturesOLHC::tableSchema
+use FuturesOLHC::utils
+
+//商品期货与历史K线对齐
+def comdtySaveMinK(nMin, mutable tb, msg){
+    t = select * from msg
+	update t set Code = regexReplace(upper(InstruID),"[0-9]","")
+	update t set p = getMultiplier(Code,Market)
+    update t set SystemTime = now()
+    update t set SetPrice = 0.
+
+	t = select ClearingDay, tradeDay, upper(InstruID) as InstruID,Code, Market,time(TradeTime)as BarTime, ClosePrice, OpenPrice, HighPrice, LowPrice, long(iif(DVolume<0,Volume, DVolume)) as Volume, double(iif(DTurnover<0,Turnover,DTurnover)) as Value, 
+	case when Volume == 0 or p < 0 
+	then ClosePrice 
+	else DTurnover/DVolume/p 
+	end as Vwap, 
+	double(OpenInt), PreSetPrice, SetPrice, ULimitPrice, LLimitPrice, PreCloPrice, SystemTime from t 
+    update t set Vwap = ClosePrice where Volume == 0
+
+    times, codes =  getFuturesTradeTimeType(nMin)
+    strs = each(def(code, time): stringFormat("(Code in ['%W'] and minute(BarTime) in [%W])", concat(code, "','"), concat(string(time), ",")), codes, times)
+    whereCon = concat(strs, " or ").parseExpr()
+    t = sql(sqlCol("*"), t, whereCon).eval()
+	tb.append!(t)
+}
+
+//筛选国债期货与历史K线对齐
+def rtSaveMinK(nMin, mutable table, msg){
+    t = select * from msg
+    t["ClearingDay"] = t["tradeDay"]
+    t['InstruID']=upper(t.InstruID)
+    t[`Market] = "C"
+    t["SetPrice"]=0.
+    t["Code"]=regexReplace(upper(t.InstruID),"[0-9]","")
+    t["SystemTime"] = now()	
+    update t set p = getMultiplier(Code,Market)
+    t = select ClearingDay,tradeDay,InstruID,Code,Market,time(TradeTime)as BarTime, ClosePrice, OpenPrice, HighPrice, LowPrice, long(iif(DVolume<0,Volume, DVolume)) as Volume, double(iif(DTurnover<0,Turnover,DTurnover)) as Value, iif(Volume == 0 or p<0, ClosePrice, DTurnover/DVolume/p) as Vwap, double(OpenInt), PreSetPrice, SetPrice, ULimitPrice, LLimitPrice, PreCloPrice, SystemTime from t 
+    update t set Vwap = ClosePrice where Volume == 0
+
+    times, codes =  getFuturesTradeTimeType(nMin)
+    strs = each(def(code, time): stringFormat("(Code in ['%W'] and minute(BarTime) in [%W])", concat(code, "','"), concat(string(time), ",")), codes, times)
+    whereCon = concat(strs, " or ").parseExpr()
+    t = sql(sqlCol("*"), t, whereCon).eval()
+	table.append!(t)
+}
+
+// 搭建商品期货流计算框架
+def buildComdtyFrame(nMin, rawStreamTbName , dbname, tbname){
+    flag = "comdty_" + string(nMin) + "min"
+    prefix = "stream - " + flag 
+    // 1. 清理环境
+    msg  = "start droping stream table and stream engines ..."
+    writeToLog(prefix, msg)
+    unsubAndDropAll(flag)
+    dropAllStreamEngine(flag)
+    msg = "finish droping stream table and stream engines ..."
+    writeToLog(prefix, msg)
+
+    // 2. 创建响应式状态引擎
+    msg  = "start creating reactiveState Engine ..."
+    writeToLog(prefix, msg)
+
+    inputTbName = rawStreamTbName
+    outputTbName = flag + "_res1"
+    enableTableShareAndPersistence(table = createComdtyRSETable(), tableName = outputTbName, cacheSize = 1000000)
+    go;
+    rseMetrics=[<iif(tradeTime>=concatDateTime(date(now()),21:00:00.000), temporalAdd(date(tradeTime),1,`CFFEX), date(tradeTime)) as ClearingDay>,<date(tradeTime) as tradeDay>,<tradeTime>,<market>,<openPrice>,<highPrice>,<lowPrice>,<lastPrice>,<volume>,<turnover>,
+	<OpenInt>,<preOpenInt>,<preSetPrice>,<preCloPrice>,<ULimitPrice>,<LLimitPrice>,
+	<iif(deltas(highPrice)>0.000001, 1, 0)>,<iif(abs(deltas(lowPrice))>0.000001, -1, 0)>,
+	<iif(deltas(volume)==NULL, 0, deltas(volume))>,<iif(deltas(turnover)==NULL, 0, deltas(turnover))>]
+
+    engineName = flag + "_rse"
+    rse=createReactiveStateEngine(name=engineName, 
+        metrics=rseMetrics, 
+        dummyTable=createComdtyRawTable(), 
+        outputTable=objByName(outputTbName, true), 
+        keyColumn=`instruID)
+    
+    msg  = "start subscribing stream table " + inputTbName + " to load data to reactiveState engine ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step1"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=append!{rse}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 3. 创建时序聚合引擎
+    msg  = "start creating timeSeries engine ..."
+    writeToLog(prefix, msg)
+
+    inputTbName = outputTbName
+    outputTbName = flag + "_res2"
+    enableTableShareAndPersistence(table = createComdtyTSETable(), tableName = outputTbName, cacheSize = 1000000)
+    go;
+    tseMetrics=[<last(ClearingDay)>,<last(tradeDay)>,<firstNot(lastPrice, 0.0) as OpenPrice>,<high(deltas_high, highPrice, lastPrice) as HighPrice>,<low(deltas_low, lowPrice, lastPrice)as LowPrice>, <lastNot(lastPrice,0) as ClosePrice>, <last(volume) as Volume>,<last(turnover) as Turnover>,<sum(deltas_trd_vol) as DVolume>,<sum(deltas_trd_tovr) as DTurnover>,<last(OpenInt) as OpenInt>,<last(preSetPrice) as PreSetPrice>,<last(preCloPrice) as PreCloPrice>,<max(ULimitPrice) as ULimitPrice>,<max(LLimitPrice) as LLimitPrice>]
+    
+    fillData = [1970.01.01, 1970.01.01, 0., 0., 0., 0., 0, 0., 0, 0., 0, 0., 0., 0., 0.]
+    engineName = flag + "_tse"
+    tse = createTimeSeriesEngine(name=engineName,
+        fill="none", 
+        windowSize=60000*nMin, 
+        step=60000*nMin, 
+        metrics=tseMetrics, 
+        dummyTable=createComdtyRSETable(), 
+        outputTable=objByName(outputTbName, true), 
+        timeColumn=`tradeTime, 
+        keyColumn=`instruID`market,
+        closed=`right,
+        forceTriggerTime=60000,
+        useSystemTime=false,
+        useWindowStartTime=false)
+    
+    msg  = "start subscribing stream table " + inputTbName + " to load data to timeSeries engine ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step2"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=append!{tse}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 4. 调整分钟线数据，与历史数据对齐
+    inputTbName = outputTbName
+    outputTbName = flag + "_kline"
+    enableTableShareAndPersistence(table = createComdtyFinalTable(), tableName = outputTbName, cacheSize = 1000000)
+    
+    msg  = "start subscribing stream table " + inputTbName + " to modify table columns, for example : get vwap ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step3"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=comdtySaveMinK{nMin, objByName(outputTbName, true)}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 5. 导入持久化数据库表
+    inputTbName = outputTbName
+    actionName = flag + "_step4"
+    pt = loadTable(dbname,tbname)
+
+    msg  = "start subscribing stream table " + inputTbName + " to load to dfs table ..."
+    writeToLog(prefix, msg)
+    subscribeTable(
+        tableName=inputTbName, 
+        actionName=actionName, 
+        offset=-1, 
+        handler= tableInsert{pt}, 
+        msgAsTable=true,
+        batchSize=1000,
+        throttle=1,
+        timeTrigger=false)
+}
+
+// 搭建债券期货流计算框架
+def buildRtFrame(nMin, rawStreamTbName , dbname, tbname){
+    flag = "rt_" + string(nMin) + "min"
+    prefix = "stream - " + flag 
+    // 1. 清理环境
+    msg  = "start droping stream table and stream engines ..."
+    writeToLog(prefix, msg)
+    unsubAndDropAll(flag)
+    dropAllStreamEngine(flag)
+    msg = "finish droping stream table and stream engines ..."
+    writeToLog(prefix, msg)
+
+    // 2. 创建响应式状态引擎
+    msg  = "start creating reactiveState Engine ..."
+    writeToLog(prefix, msg)
+
+    inputTbName = rawStreamTbName
+    outputTbName = flag + "_res1"
+    enableTableShareAndPersistence(table = createRTRSETable(), tableName = outputTbName, cacheSize = 1000000)
+    go;
+    rseMetrics=[<iif(tradeTime>=concatDateTime(date(now()),21:00:00.000), temporalAdd(date(tradeTime),1,`CFFEX), date(tradeTime)) as ClearingDay>, <date(tradeTime) as tradeDay>,<tradeTime>,<market>, <openPrice>,<highPrice>,<lowPrice>,<lastPrice>,<volume>,<turnover>,
+        <OpenInt>,<preOpenInt>,<preSetPrice>,<preCloPrice>,<ULimitPrice>,<LLimitPrice>,
+        <iif(deltas(highPrice)>0.000001, 1, 0)>,<iif(abs(deltas(lowPrice))>0.000001, -1, 0)>,
+        <iif(deltas(volume)==NULL, volume, deltas(volume))>,<iif(deltas(turnover)==NULL, turnover, deltas(turnover))>]
+
+    engineName = flag + "_rse"
+    rse=createReactiveStateEngine(name=engineName, 
+        metrics=rseMetrics, 
+        dummyTable=createRTRawTable(), 
+        outputTable=objByName(outputTbName, true), 
+        keyColumn=`InstruID)
+    
+    msg  = "start subscribing stream table " + inputTbName + " to load data to reactiveState engine ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step1"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=append!{rse}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 3. 创建时序聚合引擎
+    msg  = "start creating timeSeries engine ..."
+    writeToLog(prefix, msg)
+
+    inputTbName = outputTbName
+    outputTbName = flag + "_res2"
+    enableTableShareAndPersistence(table = createRTTSETable(), tableName = outputTbName, cacheSize = 1000000)
+    go;
+    tseMetrics=[<last(tradeDay)>,<firstNot(lastPrice, 0.0) as OpenPrice>,<high(deltas_high, highPrice, lastPrice) as HighPrice>,<low(deltas_low, lowPrice, lastPrice)as LowPrice>, <lastNot(lastPrice,0) as ClosePrice>, <last(volume) as Volume>,<last(turnover) as Turnover>,
+        <sum(deltas_trd_vol) as DVolume>,<sum(deltas_trd_tovr) as DTurnover>,<last(OpenInt) as OpenInt>,<last(preSetPrice) as PreSetPrice>,<last(preCloPrice) as PreCloPrice>,<max(ULimitPrice) as ULimitPrice>,<max(LLimitPrice) as LLimitPrice>]
+
+    engineName = flag + "_tse"
+    tse = createDailyTimeSeriesEngine(
+        name=engineName,
+        fill='none', 
+        windowSize=60000*nMin, 
+        step=60000*nMin, 
+        metrics=tseMetrics, 
+        dummyTable=createRTRSETable(), 
+        outputTable=objByName(outputTbName, true), 
+        timeColumn=`tradeTime, 
+        keyColumn=`instruID,
+        closed=`right,
+        useSystemTime=false,
+        useWindowStartTime=false,
+        sessionBegin = 09:28:00.000 13:00:00.000,
+        sessionEnd=11:30:00.000 15:15:00.000,
+        mergeSessionEnd = true,
+        forceTriggerSessionEndTime = 60000 * nMin
+    )
+
+    msg = "start subscribing stream table " + inputTbName + " to load data to timeSeries engine ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step2"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=append!{tse}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 4. 调整分钟线数据，与历史数据对齐
+    inputTbName = outputTbName
+    outputTbName = flag + "_kline"
+    enableTableShareAndPersistence(table = createRTFinalTable(), tableName = outputTbName, cacheSize = 1000000)
+    
+    msg  = "start subscribing stream table " + inputTbName + " to modify table columns, for example : get vwap ..."
+    writeToLog(prefix, msg)
+    actionName = flag + "_step3"
+    subscribeTable(tableName=inputTbName, 
+        actionName=actionName,  
+        offset= -1, 
+        handler=rtSaveMinK{nMin, objByName(outputTbName, true)}, 
+        msgAsTable=true,
+        batchSize=10,
+        throttle=1,
+        timeTrigger=false)
+
+    // 5. 导入持久化数据库表
+    inputTbName = outputTbName
+    actionName = flag + "_step4"
+    pt = loadTable(dbname,tbname)
+
+    msg  = "start subscribing stream table " + inputTbName + " to load to dfs table ..."
+    writeToLog(prefix, msg)
+    subscribeTable(
+        tableName=inputTbName, 
+        actionName=actionName, 
+        offset=-1, 
+        handler= tableInsert{pt}, 
+        msgAsTable=true,
+        batchSize=1000,
+        throttle=1,
+        timeTrigger=false)
+}

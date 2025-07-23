@@ -1,0 +1,355 @@
+// 创建数据库
+try{
+    create database "dfs://ctp_market_data"
+    partitioned by VALUE(2024.01.01..2024.01.31), HASH([SYMBOL, 40])
+    engine='TSDB'
+    atomic='CHUNK'
+}catch(ex){
+    print("Database already exists: " + ex)
+}
+
+// 构建分区表
+try{
+    create table "dfs://ctp_market_data"."ctp_market"(
+        trade_date              DATE
+        exchange_id             SYMBOL
+        unified_code            SYMBOL
+        last_price              DOUBLE
+        pre_settlement_price    DOUBLE
+        pre_close_price         DOUBLE
+        pre_open_price          DOUBLE
+        open_price              DOUBLE
+        high_price              DOUBLE
+        low_price               DOUBLE
+        volume                  LONG
+        turnover                DOUBLE
+        open_interest           DOUBLE
+        close_price             DOUBLE
+        settlement_price        DOUBLE
+        change_rate             DOUBLE
+        upper_limit_price       DOUBLE
+        lower_limit_price       DOUBLE
+        pre_delta               DOUBLE
+        current_delta           DOUBLE
+        update_time             SECOND
+        update_ms               LONG
+        bid_price               DOUBLE[]
+        bid_volume              LONG[]
+        ask_price               DOUBLE[]
+        ask_volume              LONG[]
+        avgerage_price          DOUBLE
+        action_date             DATE
+        ticker                  SYMBOL
+        exchange_inst_id        SYMBOL
+        banding_upper_price     DOUBLE
+        banding_lower_price     DOUBLE
+        data_time               TIME
+        system_time             TIMESTAMP
+        latency_ms              LONG
+        settlement_date_from_tick DATE
+    )
+    partitioned by trade_date, unified_code,
+    sortColumns=[`unified_code,`action_date, `data_time],
+    keepDuplicates=ALL
+}catch(ex){
+    print("Table already exists: " + ex)
+}
+
+/* 登录账户 */
+login("admin", "123456")
+
+/* 加载插件 */
+try{ loadPlugin("ctp") }catch(ex){print ex} 
+go
+
+/* 相关函数定义 */
+// 打印运行日志
+def ctpLog(funcName, msg, isError=false){
+    if(!isError) {
+        formattedMsg = stringFormat("<ctp>::<" + funcName + ">:" + "%W", msg)
+        writeLog(formattedMsg)
+    }
+    else{
+        formattedMsg = stringFormat("[ERROR]<ctp>::<" + funcName + ">:" + "%W", msg)
+        writeLogLevel(ERROR, formattedMsg)
+    }
+    print(formattedMsg)
+}
+
+// 创建 ctp 连接函数
+def ctpConn(ip, port, config){
+    conn = NULL
+    try {
+        conn = ctp::connect(ip, port, config)
+        ctpLog(funcName="ctpConn", msg="create connection successed", isError=false)
+    } catch (ex) {
+        ctpLog(funcName="ctpConn", msg=ex, isError=true)
+        ctpLog(funcName="ctpConn", msg="create connection failed", isError=true)
+    }
+    return conn
+}
+
+// 清理环境函数
+def ctpCleanEnvironment(ctpSubTBName, stdStreamTBName){
+    try{
+        unsubscribeTable(, ctpSubTBName, ctpSubTBName + "Std")
+        ctpLog(funcName="ctpCleanEnvironment", msg="unsubscribed " + ctpSubTBName, isError=false)
+    }catch(ex){
+        ctpLog(funcName="ctpCleanEnvironment", msg="unsubscribe " + ctpSubTBName + " error: " + ex, isError=false)
+    }
+    
+    try{
+        unsubscribeTable(, stdStreamTBName, stdStreamTBName + "ToDfs")
+        ctpLog(funcName="ctpCleanEnvironment", msg="unsubscribed " + stdStreamTBName, isError=false)
+    }catch(ex){
+        ctpLog(funcName="ctpCleanEnvironment", msg="unsubscribe " + stdStreamTBName + " error: " + ex, isError=false)
+    }
+}
+
+// 创建原始行情流表函数
+def ctpSubToStreamTB(conn, ctpSubType, ctpSubTBName, marketTBCapacity){
+    try{
+        existingTable = objByName(ctpSubTBName)
+        ctpLog(funcName="ctpSubToStreamTB", msg=ctpSubTBName + " already exists, reusing", isError=false)
+    }catch(ex){
+        if (conn == NULL) {
+            ctpLog(funcName="ctpSubToStreamTB", msg="CTP连接失败，无法获取schema，跳过创建流表", isError=true)
+            return
+        }
+        tb = ctp::getSchema(conn, ctpSubType)  
+        st = streamTable(marketTBCapacity:0, tb.name, tb.typeString)
+        share(st, ctpSubTBName)
+        ctpLog(funcName="ctpSubToStreamTB", msg=ctpSubTBName + " created successfully", isError=false)
+    }
+}
+
+// 创建标准化流表函数
+def ctpStdTB(stdStreamTBName, stdDestDBName, stdDestTBName, marketTBCapacity){
+    try{
+        existingTable = objByName(stdStreamTBName)
+        ctpLog(funcName="ctpStdTB", msg=stdStreamTBName + " already exists, reusing", isError=false)
+    }catch(ex){
+        colNames = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.name
+        colTypes = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.typeString
+        tb = streamTable(marketTBCapacity:0, colNames, colTypes)
+        share(tb, stdStreamTBName)
+        setStreamTableFilterColumn(objByName(stdStreamTBName), `unified_code)
+        ctpLog(funcName="ctpStdTB", msg=stdStreamTBName + " created successfully", isError=false)
+    }
+}
+
+// ctp 订阅函数
+def ctpSub(conn, ctpSubType, ctpSubTBName, ids){
+    try {
+        ctp::subscribe(conn, ctpSubType, objByName(ctpSubTBName), ids);
+        ctpLog(funcName="ctpSub", msg= ctpSubType + " sub successed", isError=false)
+    } catch (ex) {
+        if(ex.indexOf("already subscribed") >= 0 or ex.indexOf("已订阅") >= 0){
+            ctpLog(funcName="ctpSub", msg= ctpSubType + " already subscribed - continuing", isError=false)
+        } else {
+            ctpLog(funcName="ctpSub", msg=ex, isError=true)
+            ctpLog(funcName="ctpSub", msg=ctpSubType + " sub failed", isError=true)
+        }
+    }
+}
+
+// FIXED数据标准化函数 - 确保1:1映射，正确延迟计算
+def ctpMarketHandler(msg, stdStreamTBName) {
+    if(size(msg) == 0) return
+    
+    tmp = select * from objByName("basicInfoTable")
+    currentTime = now()
+    
+    // Process ALL data without filtering to ensure 1:1 mapping
+    temp = select * from msg
+    
+    if(size(temp) == 0) return
+    
+    // 关联交易所信息并处理数据格式
+    ctpProcess = select
+                    TradingDay as trade_date,
+                    tmp.exchange as exchange_id,
+                    iif(tmp.exchange!=NULL, InstrumentID + "." + tmp.exchange, InstrumentID) as unified_code,
+                    LastPrice as last_price,
+                    PreSettlementPrice as pre_settlement_price,
+                    PreClosePrice as pre_close_price,
+                    PreOpenInterest as pre_open_price,
+                    OpenPrice as open_price,
+                    HighestPrice as high_price,
+                    LowestPrice as low_price,
+                    long(Volume) as volume,
+                    Turnover as turnover,
+                    OpenInterest as open_interest,
+                    ClosePrice as close_price,
+                    SettlementPrice as settlement_price,
+                    (LastPrice-PreSettlementPrice)/PreSettlementPrice as change_rate,
+                    UpperLimitPrice as upper_limit_price,
+                    LowerLimitPrice as lower_limit_price,
+                    PreDelta as pre_delta,
+                    CurrDelta as current_delta,
+                    UpdateTime as update_time,
+                    long(UpdateMillisec) as update_ms,
+                    fixedLengthArrayVector(BidPrice1, BidPrice2, BidPrice3, BidPrice4, BidPrice5) as bid_price,
+                    fixedLengthArrayVector(long(BidVolume1), long(BidVolume2), long(BidVolume3), long(BidVolume4), long(BidVolume5)) as bid_volume,
+                    fixedLengthArrayVector(AskPrice1, AskPrice2, AskPrice3, AskPrice4, AskPrice5) as ask_price,
+                    fixedLengthArrayVector(long(AskVolume1), long(AskVolume2), long(AskVolume3), long(AskVolume4), long(AskVolume5)) as ask_volume,
+                    AveragePrice as avgerage_price,
+                    ActionDay as action_date,
+                    InstrumentID as ticker,
+                    ExchangeInstID as exchange_inst_id,
+                    BandingUpperPrice as banding_upper_price,
+                    BandingLowerPrice as banding_lower_price,
+                    tradeTime as data_time,
+                    currentTime as system_time,
+                    long(1000) as latency_ms,
+                    iif(tradeTime >= 15:30:00.000, temporalAdd(date(tradeTime), 1, `d), date(tradeTime)) as settlement_date_from_tick
+                from lj(temp, tmp, `InstrumentID, `trade_code)
+                
+    // 日期调整（仅在需要时）
+    update ctpProcess set action_date=temporalAdd(trade_date, -1, `d) where data_time>=20:40:00.000 and exchange_id="DCE"
+    update ctpProcess set action_date=temporalAdd(trade_date, -1, `d)+1 where data_time<=03:00:00.000 and exchange_id="DCE" 
+    update ctpProcess set trade_date=temporalAdd(trade_date, 1, `d) where data_time>=20:40:00.000 and exchange_id="CZC" 
+    
+    objByName(stdStreamTBName).append!(ctpProcess)
+}
+
+// 主函数
+def main(){
+    ctpLog(funcName="mainFuc", msg="FIXED CTP服务开始执行", isError=false)
+    
+    // CTP连接配置
+    ip = "182.254.243.31"
+    port = 30011
+    config={
+        "OutputElapsed": true,
+        "ReceivedTime": true,
+        "ConcatTime": true
+    }
+    
+    // 建立CTP连接
+    ctpLog(funcName="mainFuc", msg="建立CTP连接...", isError=false)
+    conn = ctpConn(ip, port, config)
+    
+    // 动态获取所有可用合约 - NO FALLBACK
+    ctpLog(funcName="mainFuc", msg="正在查询所有可用合约...", isError=false)
+    
+    allInstruments = NULL
+    try {
+        allInstruments = ctp::queryInstrument("tcp://180.168.146.187", 10212, "9999", "224829", "evan@cash1q2", "simnow_client_test", "0000000000000000")
+        ctpLog(funcName="mainFuc", msg="CTP动态查询成功，合约数: " + string(size(allInstruments)), isError=false)
+        
+        if (size(allInstruments) >= 500) {
+            ctpLog(funcName="mainFuc", msg="SUCCESS: 获得 " + string(size(allInstruments)) + " 个合约", isError=false)
+        } else {
+            ctpLog(funcName="mainFuc", msg="WARNING: 只获得 " + string(size(allInstruments)) + " 个合约", isError=true)
+        }
+        
+    } catch(ex) {
+        ctpLog(funcName="mainFuc", msg="CTP查询失败: " + ex, isError=true)
+        allInstruments = NULL
+    }
+    
+    // ERROR: No fallback - system must fail if CTP query fails
+    if (allInstruments == NULL or size(allInstruments) == 0) {
+        ctpLog(funcName="mainFuc", msg="CRITICAL ERROR: CTP合约查询失败，无法获取合约列表。系统无法继续运行。", isError=true)
+        throw "CTP instrument query failed - cannot proceed without valid contract list"
+    }
+    
+    // 过滤期货合约 (排除期权)
+    futuresOnly = select instrumentID from allInstruments 
+                  where strlen(instrumentID) <= 6 and 
+                        not (instrumentID like "%C-%" or instrumentID like "%P-%" or 
+                             instrumentID like "%-C" or instrumentID like "%-P" or
+                             instrumentID like "%C%" and strlen(instrumentID) > 6 or
+                             instrumentID like "%P%" and strlen(instrumentID) > 6)
+    
+    ctpLog(funcName="mainFuc", msg="过滤后期货合约数量: " + string(size(futuresOnly)), isError=false)
+    
+    // 创建交易所映射表
+    exchangeMapping = table(
+        ["A","AD","AG","AL","AO","AP","AU","B","BB","BC","BR","BU","BZ","C","CF","CJ","CS","CU","CY","EB","EC","EG","ER","FB","FG","FU","HC","I","IC","IF","IH","IM","J","JD","JM","JR","L","LC","LG","LH","LR","LU","M","MA","ME","NI","NR","OI","P","PB","PF","PG","PK","PM","PP","PR","PS","PX","RB","RI","RM","RO","RR","RS","RU","S","SA","SC","SF","SH","SI","SM","SN","SP","SR","SS","T","TA","TC","TF","TL","TS","UR","V","WH","WR","WS","WT","Y","ZC","ZN"] as underlying_symbol,
+        ["DCE","SHFE","SHFE","SHFE","SHFE","CZCE","SHFE","DCE","DCE","INE","SHFE","SHFE","DCE","DCE","CZCE","CZCE","DCE","SHFE","CZCE","DCE","INE","DCE","CZCE","DCE","CZCE","SHFE","SHFE","DCE","CFFEX","CFFEX","CFFEX","CFFEX","DCE","DCE","DCE","CZCE","DCE","GFEX","DCE","DCE","CZCE","INE","DCE","CZCE","CZCE","SHFE","INE","CZCE","DCE","SHFE","CZCE","DCE","CZCE","CZCE","DCE","CZCE","GFEX","CZCE","SHFE","CZCE","CZCE","CZCE","DCE","CZCE","SHFE","DCE","CZCE","INE","CZCE","CZCE","GFEX","CZCE","SHFE","SHFE","CZCE","SHFE","CFFEX","CZCE","CZCE","CFFEX","CFFEX","CFFEX","CZCE","DCE","CZCE","SHFE","CZCE","CZCE","DCE","CZCE","SHFE"] as exchange
+    )
+    
+    // 动态提取父符号
+    contractCodes = exec instrumentID from futuresOnly
+    parentSymbols = array(SYMBOL, size(contractCodes))
+    for (i in 0..(size(contractCodes)-1)) {
+        contract = contractCodes[i]
+        parentSymbol = ""
+        for (j in 0..(strlen(contract)-1)) {
+            if (contract[j] >= "0" and contract[j] <= "9") {
+                if (j > 0) {
+                    parentSymbol = upper(substr(contract, 0, j))
+                }
+                break
+            }
+        }
+        if (strlen(parentSymbol) == 0) {
+            parentSymbol = NULL
+        }
+        parentSymbols[i] = parentSymbol
+    }
+    
+    contractInfo = table(contractCodes as trade_code, parentSymbols as parent_symbol)
+    
+    // 关联交易所信息
+    tmp = select contractInfo.trade_code, 
+                 iif(exchangeMapping.exchange != NULL, exchangeMapping.exchange, "UNKNOWN") as exchange,
+                 contractInfo.parent_symbol
+          from lj(contractInfo, exchangeMapping, `parent_symbol, `underlying_symbol)
+    
+    try{
+        undef("basicInfoTable", SHARED)
+    }catch(ex){}
+    share(tmp, "basicInfoTable")
+    
+    ids = exec string(trade_code) from tmp
+    ctpLog(funcName="mainFuc", msg="最终订阅合约数量: " + string(size(ids)), isError=false)
+
+    // 流表配置
+    marketTBCapacity = 2000000
+    ctpSubType = "marketData"
+    ctpSubTBName = "ctpMarketDataStream"
+    stdStreamTBName = "ctpMarketStream"
+    stdDestDBName = "dfs://ctp_market_data"
+    stdDestTBName = "ctp_market"
+    
+    // 清理环境
+    ctpLog(funcName="mainFuc", msg="清理环境...", isError=false)
+    ctpCleanEnvironment(ctpSubTBName, stdStreamTBName)
+    
+    // 创建流表
+    ctpLog(funcName="mainFuc", msg="创建原始行情流表...", isError=false)
+    ctpSubToStreamTB(conn, ctpSubType, ctpSubTBName, marketTBCapacity)
+    
+    ctpLog(funcName="mainFuc", msg="创建标准化流表...", isError=false)
+    ctpStdTB(stdStreamTBName, stdDestDBName, stdDestTBName, marketTBCapacity)
+    
+    // 设置数据处理订阅
+    ctpLog(funcName="mainFuc", msg="设置数据处理订阅...", isError=false)
+    try{
+        subscribeTable(tableName=ctpSubTBName, actionName=ctpSubTBName + "Std", offset=-1, handler=ctpMarketHandler{, stdStreamTBName}, msgAsTable=true, batchSize=10000, throttle=0.001, hash=0, reconnect=true)
+        ctpLog(funcName="mainFuc", msg="数据处理订阅成功", isError=false)
+    }catch(ex){
+        ctpLog(funcName="mainFuc", msg="数据处理订阅失败: " + ex, isError=true)
+    }
+    
+    // 设置数据库写入订阅
+    ctpLog(funcName="mainFuc", msg="设置数据库写入订阅...", isError=false)
+    try{
+        subscribeTable(tableName=stdStreamTBName, actionName=stdStreamTBName + "ToDfs", offset=-1, handler=loadTable(stdDestDBName, stdDestTBName), msgAsTable=true, batchSize=5000, throttle=1, hash=1, reconnect=true)
+        ctpLog(funcName="mainFuc", msg="数据库写入订阅成功", isError=false)
+    }catch(ex){
+        ctpLog(funcName="mainFuc", msg="数据库写入订阅失败: " + ex, isError=true)
+    }
+    
+    // 开始CTP订阅
+    ctpLog(funcName="mainFuc", msg="开始CTP订阅...", isError=false)
+    ctpSub(conn, ctpSubType, ctpSubTBName, ids)
+    
+    ctpLog(funcName="mainFuc", msg="FIXED CTP服务启动完成", isError=false)
+}
+
+/* 执行主函数 */
+main()

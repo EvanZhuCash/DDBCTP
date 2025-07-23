@@ -1,0 +1,241 @@
+module FuturesOLHC::utils
+
+def writeToLog(prefix, msg){
+    res = stringFormat("[%W] : %W", prefix, msg)
+    print(res)
+    writeLog(res)
+}
+
+
+def unsubAll(pattern){
+	topics = exec topic from getStreamingStat().subWorkers where regexFind(topic, pattern) != -1
+	topics = split(topics, "/")
+	streamTbname = each(x -> x[1], topics)
+	topicName = each(x -> x[2], topics)
+	for (i in til(size(streamTbname))){
+		if(isNull(topicName[i])) {
+			unsubscribeTable(, streamTbname[i])
+		}else{
+			unsubscribeTable(, streamTbname[i], topicName[i])
+		}
+	}
+}
+
+// 删除流表，可以根据指定规则
+def dropAllStream(pattern){
+	streamTbs = exec name from objs(true) where shared = true and type == "REALTIME" and regexFind(name, pattern) != -1
+	each(dropStreamTable{,true}, streamTbs)	
+}
+
+def dropAllStreamEngine(pattern){
+	streamEngines = getStreamEngineStat()
+	names = []
+	for (k in streamEngines.keys()){
+		names.append!(streamEngines[k].name)
+	}
+	names = flatten(names)
+	if (size(names) == 0) return
+	names = names[regexFind(names, pattern) != -1]
+	if (size(names) > 0){
+		each(dropStreamEngine, names)
+	}
+}
+
+// 取消订阅并删除流表，可以根据指定规则
+def unsubAndDropAll(pattern){
+	unsubAll(pattern)
+	go;
+	dropAllStream(pattern)
+}
+
+
+
+defg high(deltasHighPrice, highPrice, lastPrice){
+	if(sum(deltasHighPrice)>0.000001){
+		return max(highPrice)
+	}
+	else{
+		return max(lastPrice)
+	}
+}
+
+defg low(deltasLowPrice, lowPrice, lastPrice){
+	sumDeltas = sum(deltasLowPrice)
+	if(sumDeltas<-0.000001 and sumDeltas!=NULL){
+		return min(iif(lowPrice==0.0, NULL, lowPrice))
+	}
+	else{
+		return min(lastPrice)
+	}
+}
+
+def getMultiplier(sym, mkt){
+	CHN_QUODCF_D_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_D_MULTIPLIER["A"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["B"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["BB"] = 500;
+	CHN_QUODCF_D_MULTIPLIER["C"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["CS"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["EB"] = 5;
+	CHN_QUODCF_D_MULTIPLIER["EG"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["FB"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["I"] = 100;
+	CHN_QUODCF_D_MULTIPLIER["J"] = 100;
+	CHN_QUODCF_D_MULTIPLIER["JD"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["JM"] = 60;
+	CHN_QUODCF_D_MULTIPLIER["L"] = 5;
+	CHN_QUODCF_D_MULTIPLIER["LH"] = 16;
+	CHN_QUODCF_D_MULTIPLIER["M"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["P"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["PG"] = 20;
+	CHN_QUODCF_D_MULTIPLIER["PP"] = 5;
+	CHN_QUODCF_D_MULTIPLIER["RR"] = 10;
+	CHN_QUODCF_D_MULTIPLIER["V"] = 5;
+	CHN_QUODCF_D_MULTIPLIER["Y"] = 10;
+
+	CHN_QUODCF_Z_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_Z_MULTIPLIER["ZC"] = 100;
+	CHN_QUODCF_Z_MULTIPLIER["WH"] = 20
+	CHN_QUODCF_Z_MULTIPLIER["UR"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["TA"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["SR"] = 10;
+	CHN_QUODCF_Z_MULTIPLIER["SM"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["SH"] = 30;
+	CHN_QUODCF_Z_MULTIPLIER["SF"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["SA"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["RS"] = 10;
+	CHN_QUODCF_Z_MULTIPLIER["RM"] = 10;
+	CHN_QUODCF_Z_MULTIPLIER["RI"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["PX"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["PM"] = 50;
+	CHN_QUODCF_Z_MULTIPLIER["PK"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["PF"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["OI"] = 10;
+	CHN_QUODCF_Z_MULTIPLIER["MA"] = 10;
+	CHN_QUODCF_Z_MULTIPLIER["LR"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["JR"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["FG"] = 20;
+	CHN_QUODCF_Z_MULTIPLIER["CY"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["CJ"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["CF"] = 5;
+	CHN_QUODCF_Z_MULTIPLIER["AP"] = 10;
+
+	CHN_QUODCF_S_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_S_MULTIPLIER["ZN"] = 5;
+	CHN_QUODCF_S_MULTIPLIER["WR"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["SS"] = 5;
+	CHN_QUODCF_S_MULTIPLIER["SP"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["SN"] = 1;
+	CHN_QUODCF_S_MULTIPLIER["RU"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["RB"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["PB"] = 5;
+	CHN_QUODCF_S_MULTIPLIER["NI"] = 1;
+	CHN_QUODCF_S_MULTIPLIER["HC"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["FU"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["CU"] = 5;
+	CHN_QUODCF_S_MULTIPLIER["BU"] = 10;
+	CHN_QUODCF_S_MULTIPLIER["BR"] = 5;
+	CHN_QUODCF_S_MULTIPLIER["AU"] = 1000;
+	CHN_QUODCF_S_MULTIPLIER["AO"] = 20;
+	CHN_QUODCF_S_MULTIPLIER["AL"] = 5; 
+	CHN_QUODCF_S_MULTIPLIER["AG"] = 15;
+
+	CHN_QUODCF_N_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_N_MULTIPLIER["SC"] = 1000;
+	CHN_QUODCF_N_MULTIPLIER["NR"] = 10;
+	CHN_QUODCF_N_MULTIPLIER["LU"] = 10;
+	CHN_QUODCF_N_MULTIPLIER["EC"] = 50;
+	CHN_QUODCF_N_MULTIPLIER["BC"] = 5
+
+	CHN_QUODCF_G_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_G_MULTIPLIER["SI"] = 5;
+	CHN_QUODCF_G_MULTIPLIER["LC"] = 1;
+
+    CFF_QUODTF_C_MULTIPLIER = dict(STRING,INT);
+    CFF_QUODTF_C_MULTIPLIER["TS"] = 20000
+    CFF_QUODTF_C_MULTIPLIER["TF"] = 10000
+    CFF_QUODTF_C_MULTIPLIER["TL"] = 10000
+    CFF_QUODTF_C_MULTIPLIER["T"] = 10000
+
+	CHN_QUODCF_OTHER_MULTIPLIER = dict(STRING,INT);
+	CHN_QUODCF_OTHER_MULTIPLIER["OTHER"] = -1;
+
+	res = iif(mkt == "D", CHN_QUODCF_D_MULTIPLIER[sym], iif(mkt == "Z", CHN_QUODCF_Z_MULTIPLIER[sym], iif(mkt == "S", CHN_QUODCF_S_MULTIPLIER[sym], iif(mkt == "N", CHN_QUODCF_N_MULTIPLIER[sym], iif(mkt == "G", CHN_QUODCF_G_MULTIPLIER[sym], iif(mkt == "C", CFF_QUODTF_C_MULTIPLIER[sym], CHN_QUODCF_OTHER_MULTIPLIER["OTHER"]))))))
+
+	return res
+}
+
+def getMinKTime(startMin, endMin, nMin){
+    return each(last, cut((startMin+1)..endMin, nMin))
+}
+
+def getFuturesTradeTimeType(nMin){
+	time1 = getMinKTime(21:00m, 23:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time1Code = [`A,`B,`BR,`C,`CS,`EB,`EG,`I,`J,`JM,`L,`M,`P,`PG,`PP,`PX,`RR,`V,`Y,`BU,`FU,`HC,`RB,`RU,`SP,`ZC,`CF,`CY,`FG,`MA,`OI,`PF,`RM,`SA,`SR,`SH,`TA]
+
+	time2 = getMinKTime(21:00m, 23:55m, nMin) <- 00:00m <- getMinKTime(00:00m, 02:30m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time2Code = [`AG,`AU,`SC] 
+    
+    time3 = getMinKTime(21:00m, 23:55m, nMin) <- 00:00m <- getMinKTime(00:00m, 01:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time3Code = [`AL,`AO,`BC,`CU,`NI,`PB,`SN,`SS,`ZN]
+    
+    time4 = getMinKTime(21:00m, 23:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time4Code = [`LU,`NR]
+
+    // 09:00m 也包含在内
+    time5 = getMinKTime(08:55m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time5Code = [`AP,`CJ,`EC,`JR,`LR,`PK,`PM,`RI,`RS,`SF,`SM,`UR,`BB,`FB,`JD,`LH,`WR,`WH,`LC,`SI]
+    
+    time6 =getMinKTime(09:30m, 11:30m, nMin) <- getMinKTime(13:00m, 15:15m, nMin)
+    time6Code = [`T,`TF,`TS,`TL]
+
+	return (time1, time2, time3, time4, time5, time6), (time1Code, time2Code, time3Code, time4Code, time5Code, time6Code)
+}
+
+def getFuturesTradeTime(nMin, codes) {
+    //不同品种类对应的时间段，例：IC IF IH IM 交易时间都为 9：30—11：30，13：00—15：00
+    //若有新的时间段或期货种类，可自行添加
+    time1 = getMinKTime(21:00m, 23:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time1Code = [`A,`B,`BR,`C,`CS,`EB,`EG,`I,`J,`JM,`L,`M,`P,`PG,`PP,`PX,`RR,`V,`Y,`BU,`FU,`HC,`RB,`RU,`SP,`ZC,`CF,`CY,`FG,`MA,`OI,`PF,`RM,`SA,`SR,`SH,`TA]
+
+	time2 = getMinKTime(21:00m, 23:55m, nMin) <- 00:00m <- getMinKTime(00:00m, 02:30m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time2Code = [`AG,`AU,`SC] 
+    
+    time3 = getMinKTime(21:00m, 23:55m, nMin) <- 00:00m <- getMinKTime(00:00m, 01:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time3Code = [`AL,`AO,`BC,`CU,`NI,`PB,`SN,`SS,`ZN]
+    
+    time4 = getMinKTime(21:00m, 23:00m, nMin) <- getMinKTime(09:00m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time4Code = [`LU,`NR]
+
+    // 09:00m 也包含在内
+    time5 = getMinKTime(08:55m, 10:15m, nMin) <- getMinKTime(10:30m, 11:30m, nMin) <- getMinKTime(13:30m, 15:00m, nMin)
+    time5Code = [`AP,`CJ,`EC,`JR,`LR,`PK,`PM,`RI,`RS,`SF,`SM,`UR,`BB,`FB,`JD,`LH,`WR,`WH,`LC,`SI]
+    
+    time6 =getMinKTime(09:30m, 11:30m, nMin) <- getMinKTime(13:00m, 15:15m, nMin)
+    time6Code = [`T,`TF,`TS,`TL]
+
+    getCjRes = def(col1, col2){
+        tmp = cj(table(col1 as code), table(col2 as min))
+        return tmp
+    }
+
+    // codes中的不同种期货提取，并与对应的时间段time叉乘
+    t1 = exec * from codes where code in time1Code
+    t1 = getCjRes(t1, time1)
+    t2 = exec * from codes where code in time2Code
+    t2 = getCjRes(t2, time2)
+    t3 = exec * from codes where code in time3Code
+    t3 = getCjRes(t3, time3)
+    t4 = exec * from codes where code in time4Code
+    t4 = getCjRes(t4, time4)
+    t5 = exec * from codes where code in time5Code
+    t5 = getCjRes(t5, time5)
+    t6 = exec * from codes where code in time6Code
+    t6 = getCjRes(t6, time6)
+
+    return unionAll([t1,t2,t3,t4,t5,t6],false)
+}
+
+def fillFunc(col, preClosePrice){
+    return iif(col==0.0, iif(cumlastNot(col, 0.0)==NULL,  preClosePrice, cumlastNot(col, 0.0)) , col)
+}

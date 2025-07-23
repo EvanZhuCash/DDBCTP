@@ -1,0 +1,179 @@
+// 数据放置于服务器：192.168.100.44 下
+clearCachedModules()
+go;
+
+// 引入模块文件
+use FuturesOLHC::createTable
+// 商品期货快照数据数据库名
+comdtySnapDbname = "dfs://comdtySnapDb"
+// 商品期货快照数据数据表名
+comdtySnapTbname = "comdtySnapTb1"
+// 商品期货分钟和主连数据库名
+comdtyMinDbname = "dfs://comdtyMin"
+// 商品期货分钟数据表名
+comdtyMinTbname = "futurePrice1Min1"
+// 商品期货分钟数据主连行情数据表名
+comdtyZlTbname = "futurePrice1MinZl1"
+
+// 国债期货快照数据数据库名
+rtSnapDbname = "dfs://rtSnapDb"
+// 国债期货快照数据数据表名
+rtSnapTbname = "rtSnapTb1"
+// 国债期货分钟和主连数据库名
+rtMinDbname = "dfs://rtMin"
+// 国债期货分钟数据表名
+rtMinTbname = "futurePrice1Min1"
+// 国债期货分钟数据主连行情数据表名
+rtZlTbname = "futurePrice1MinZl1"
+//each(dropDatabase, ["dfs://comdtySnapDb", "dfs://comdtyMin", "dfs://rtSnapDb", "dfs://rtMin"])
+// 根据指定参数创建相应库表
+createComdtyFuturesDfs(comdtySnapDbname, comdtySnapTbname)
+
+createComdtyFuturesMinDfs(comdtyMinDbname, comdtyMinTbname)
+
+createComdtyFuturesZlDfs(comdtyMinDbname, comdtyZlTbname)
+
+createRtFuturesDfs(rtSnapDbname, rtSnapTbname)
+
+createRtFuturesMinDfs(rtMinDbname, rtMinTbname)
+
+createRtFuturesZlDfs(rtMinDbname, rtZlTbname)
+
+/* ----------------------------------------  流计算 ----------------------------------------------------------- */
+// 引入模块文件
+use FuturesOLHC::streamFrame 
+use FuturesOLHC::tableSchema
+use FuturesOLHC::utils
+
+// 商品期货原始流数据表名
+rawComdtyStreamTbName = "comdtyStreamTb"
+// 国债期货原始流数据表名
+rawRtStreamTbName = "rtStreamTb"
+
+try{
+	// 先删除持久化流表
+	unsubAndDropAll(rawComdtyStreamTbName)
+    unsubAndDropAll(rawRtStreamTbName)
+	truncate(comdtySnapDbname, comdtySnapTbname)
+	truncate(rtSnapDbname, rtSnapTbname)
+	// 再创建相应持久化流表
+	enableTableShareAndPersistence(table=createComdtyRawTable(), tableName=rawComdtyStreamTbName, cacheSize=10000)
+    enableTableShareAndPersistence(table=createRTRawTable(), tableName=rawRtStreamTbName, cacheSize=10000)
+}catch(ex){
+	print(ex)
+}
+
+
+// 创建商品期货快照数据流计算框架
+nMin = 1 //分钟频率 (例：1 表示生成 1 分钟 K 线)
+dbname = comdtyMinDbname // 分钟数据最终导入的数据库名
+tbname = comdtyMinTbname // 分钟数据最终导入的数据表名
+FuturesOLHC::streamFrame::buildComdtyFrame(nMin, rawComdtyStreamTbName, dbname, tbname)
+go;
+
+// 创建国债期货快照数据流计算框架
+nMin = 1 //分钟频率 (例：1 表示生成 1 分钟 K 线)
+dbname = rtMinDbname // 分钟数据最终导入的数据库名
+tbname = rtMinTbname // 分钟数据最终导入的数据表名
+FuturesOLHC::streamFrame::buildRtFrame(nMin, rawRtStreamTbName, dbname, tbname)
+go;
+
+// 商品期货数据文件存放路径
+comdtyPath = "/hdd/hdd8/ymchen/comdty_tickdata.csv"
+// 获取流表表结构
+pt = loadTable(comdtySnapDbname, comdtySnapTbname)
+sche = schema(pt).colDefs
+// 将示例数据导入内存表
+comdtyTickdata = loadText(comdtyPath, , sche)
+
+// 回放示例数据到流表中
+replay(comdtyTickdata, objByName(rawComdtyStreamTbName,true), `tradeTime, `tradeTime, -1, false)
+sleep(5000)
+
+go;
+lastData = select * from objByName(`comdtyStreamTb) limit 1
+update lastData set tradeTime = concatDateTime(date(tradeTime), (exec max(time(tradeTime)) from comdtyTickdata)[0] + 1000 * 3)
+objByName(`comdtyStreamTb).append!(lastData)
+sleep(5000)
+go;
+
+// 国债期货数据文件存放路径
+rtPath = "/hdd/hdd8/ymchen/rt_tickdata.csv"
+// 获取流表表结构
+pt = loadTable(rtSnapDbname, rtSnapTbname)
+sche = schema(pt).colDefs
+// 将示例数据导入内存表
+rtTickdata = loadText(rtPath,,sche)
+// 回放示例数据到流表中
+replay(rtTickdata, objByName(rawRtStreamTbName,true), `tradeTime, `tradeTime, -1, false)
+
+lastData = select * from objByName(`rtStreamTb) limit 1
+update lastData set tradeTime = concatDateTime(date(tradeTime), (exec max(time(tradeTime)) from rtTickdata)[0] + 1000 * 61)
+objByName(`rtStreamTb).append!(lastData)
+sleep(5000)
+
+/* ----------------------------------------------  批计算 --------------------------------------------------------------- */
+use FuturesOLHC::batchFrame
+
+// 商品期货历史快照数据 K 线计算
+dataType = "cmdty" // 
+dbname = comdtySnapDbname// 存放历史原始数据的数据库名
+tbname = comdtySnapTbname // 存放历史原始数据的数据表名
+truncate(dbname, tbname)
+// 将示例数据导入库表中
+pt = loadTable(dbname, tbname)
+pt.tableInsert(comdtyTickdata)
+
+startDate = 2024.10.10 // 计算开始时间 
+endDate = 2024.10.10 // 计算结束时间 
+nMin = 1 //分钟频率 (例：1 表示生成 1分钟 K 线)
+res1  = getFuturesKMin(dataType, dbname, tbname, startDate, endDate, nMin)
+
+
+// 国债期货历史快照数据 K 线计算
+dataType = "rt" // 
+dbname = rtSnapDbname// 存放历史原始数据的数据库名
+tbname = rtSnapTbname // 存放历史原始数据的数据表名
+// 将示例数据导入库表中
+truncate(dbname, tbname)
+pt = loadTable(dbname, tbname)
+pt.tableInsert(rtTickdata)
+
+startDate = 2024.10.08 // 计算开始时间 
+endDate = 2024.10.08 // 计算结束时间 
+nMin = 1 //分钟频率 (例：1 表示生成 1分钟 K 线)
+res2  = getFuturesKMin(dataType, dbname, tbname, startDate, endDate, nMin)
+
+// 商品期货主连行情
+minDbname = comdtyMinDbname
+minTbname = comdtyMinTbname
+zlDbname = comdtyMinDbname
+zlTbname = comdtyZlTbname
+startDate = 2024.10.10
+endDate = 2024.10.10
+nMin = 1
+for (day in 2024.10.09..2024.10.09){
+	tb = select * from loadTable(comdtyMinDbname, comdtyMinTbname) where tradeDay = 2024.10.10
+	update tb set clearingDay = day, tradeDay = day
+	loadTable(comdtyMinDbname, comdtyMinTbname).append!(tb)
+	print(day)
+}
+comdtyZL = comdtyZlFuturesKMin(minDbname, minTbname, zlDbname, zlTbname, startDate, endDate, nMin)
+
+// 国债期货主连行情
+loadTable(rtMinDbname, rtMinTbname).tableInsert(res2)
+minDbname = rtMinDbname
+minTbname = rtMinTbname
+zlDbname = rtMinDbname
+zlTbname = rtZlTbname
+startDate = 2024.10.08
+endDate = 2024.10.08
+nMin = 1
+for (day in 2024.09.30..2024.09.30){
+	tb = select * from loadTable(rtMinDbname, rtMinTbname)
+	update tb set clearingDay = day, tradeDay = day
+	loadTable(rtMinDbname, rtMinTbname).append!(tb)
+	print(day)
+}
+rtZL = rtZlFuturesKMin(minDbname, minTbname, zlDbname, zlTbname, startDate, endDate, nMin)
+

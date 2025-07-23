@@ -1,0 +1,393 @@
+// =============================================================================
+// DOMINANT CONTRACT STREAM MANAGEMENT - REAL 2023 DATA
+// =============================================================================
+// Purpose: Manage dominant contract streams for Y and M futures using real 2023 data
+// Features:
+// - Real minute-level data from DolphinDB database
+// - Volume-based dominant contract selection
+// - Proper contract concatenation for continuous streams
+// - Support for Y and M contract types with rollover rules
+// - No look-forward bias
+// =============================================================================
+
+print("DOMINANT CONTRACT STREAM - Starting with real 2023 data...")
+
+// Cleanup
+try { undef(`dominantContracts, SHARED) } catch(ex) {}
+try { undef(`contractRollover, SHARED) } catch(ex) {}
+try { undef(`dominantContractStreamY, SHARED) } catch(ex) {}
+try { undef(`dominantContractStreamM, SHARED) } catch(ex) {}
+
+// Create dominant contract streams for Y and M
+share streamTable(100000:0, `trading_date`datetime`symbol`open`high`low`close`volume`total_turnover,
+                 [DATE, DATETIME, SYMBOL, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as dominantContractStreamY
+
+share streamTable(100000:0, `trading_date`datetime`symbol`open`high`low`close`volume`total_turnover,
+                 [DATE, DATETIME, SYMBOL, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE, DOUBLE]) as dominantContractStreamM
+
+// Create rollover tracking
+share streamTable(1000:0, `time`contract_type`old_symbol`new_symbol`reason,
+                 [TIMESTAMP, STRING, STRING, STRING, STRING]) as contractRollover
+
+print("Dominant contract tables created")
+
+// =============================================================================
+// REAL DATA LOADING FUNCTIONS
+// =============================================================================
+
+// Load real Y contract data for 2023
+def loadYContractData() {
+    print("Loading Y contract data from database...")
+
+    // Database Configuration
+    DB_PATH = "dfs://rq_cn_futures_minute_Y"
+    TABLE_NAME = "k_minute"
+    START_DATE = 2023.01.01
+    END_DATE = 2023.12.31
+
+    // Load database table
+    tb = loadTable(DB_PATH, TABLE_NAME)
+
+    // Get all Y contract data for 2023
+    yData = select trading_date, datetime, order_book_id as symbol,
+                   open, high, low, close, volume, total_turnover
+            from tb
+            where trading_date between START_DATE : END_DATE
+            and order_book_id like "Y%"
+            order by trading_date, datetime
+
+    print("Loaded " + string(exec count(*) from yData) + " Y contract records")
+    return yData
+}
+
+// Load real M contract data for 2023
+def loadMContractData() {
+    print("Loading M contract data from database...")
+
+    // Database Configuration
+    DB_PATH = "dfs://rq_cn_futures_minute_M"
+    TABLE_NAME = "k_minute"
+    START_DATE = 2023.01.01
+    END_DATE = 2023.12.31
+
+    // Load database table
+    tb = loadTable(DB_PATH, TABLE_NAME)
+
+    // Get all M contract data for 2023
+    mData = select trading_date, datetime, order_book_id as symbol,
+                   open, high, low, close, volume, total_turnover
+            from tb
+            where trading_date between START_DATE : END_DATE
+            and order_book_id like "M%"
+            order by trading_date, datetime
+
+    print("Loaded " + string(exec count(*) from mData) + " M contract records")
+    return mData
+}
+
+// =============================================================================
+// CONFIGURATION PARAMETERS
+// =============================================================================
+
+// Rollover method options: "VOLUME", "OPEN_INTEREST", "CALENDAR"
+ROLLOVER_METHOD = "CALENDAR"  // Change this to switch methods
+
+// Calendar rollover configuration
+ROLLOVER_DAYS_BEFORE_EXPIRY_Y = 30  // Y contracts rollover 30 days before expiry
+ROLLOVER_DAYS_BEFORE_EXPIRY_M = 30  // M contracts rollover 15 days before expiry
+CONTRACT_LISTING_MONTHS_AHEAD = 6   // Contracts available 6 months ahead
+MIN_TRADING_DAYS_REQUIRED = 5       // Minimum trading days before using contract
+
+// Contract month patterns (1,5,9 for both Y and M)
+VALID_CONTRACT_MONTHS = 1 5 9
+
+print("=== ROLLOVER CONFIGURATION ===")
+print("Rollover Method: " + ROLLOVER_METHOD)
+print("Y Rollover Days: " + string(ROLLOVER_DAYS_BEFORE_EXPIRY_Y))
+print("M Rollover Days: " + string(ROLLOVER_DAYS_BEFORE_EXPIRY_M))
+print("Valid Contract Months: 1, 5, 9")
+
+// =============================================================================
+// DOMINANT CONTRACT SELECTION FUNCTIONS
+// =============================================================================
+
+// Calendar-based dominant contract selection (no look-forward bias)
+def getDominantContractCalendar(currentDate, availableContracts, rolloverDays, listingMonthsAhead, minTradingDays) {
+    knownContracts = array(STRING, 0)
+
+    // Filter contracts that are available for trading (no look-forward bias)
+    for (contract in availableContracts) {
+        if (strlen(contract) >= 5) {
+            contractYearStr = substr(contract, 1, 2)
+            contractMonthStr = substr(contract, 3, 2)
+
+            contractYear = 2000 + int(contractYearStr)
+            contractMonth = int(contractMonthStr)
+
+            // Only consider valid contract months (1,5,9)
+            if (contractMonth == 1 or contractMonth == 5 or contractMonth == 9) {
+                monthStr = iif(contractMonth < 10, "0" + string(contractMonth), string(contractMonth))
+                dateStr = string(contractYear) + "." + monthStr + ".01"
+                expiryDate = date(dateStr)
+
+                listingDate = temporalAdd(expiryDate, -listingMonthsAhead, `M)
+                minTradingDate = temporalAdd(listingDate, minTradingDays, `d)
+
+                if (currentDate >= minTradingDate) {
+                    knownContracts.append!(contract)
+                }
+            }
+        }
+    }
+
+    // Filter contracts that haven't reached rollover date yet
+    validContracts = array(STRING, 0)
+    for (contract in knownContracts) {
+        if (strlen(contract) >= 5) {
+            contractYearStr = substr(contract, 1, 2)
+            contractMonthStr = substr(contract, 3, 2)
+
+            contractYear = 2000 + int(contractYearStr)
+            contractMonth = int(contractMonthStr)
+
+            monthStr = iif(contractMonth < 10, "0" + string(contractMonth), string(contractMonth))
+            dateStr = string(contractYear) + "." + monthStr + ".01"
+            expiryDate = date(dateStr)
+
+            rolloverDate = temporalAdd(expiryDate, -rolloverDays, `d)
+
+            if (currentDate <= rolloverDate) {
+                validContracts.append!(contract)
+            }
+        }
+    }
+
+    // Return the first valid contract (earliest expiry)
+    if (size(validContracts) > 0) {
+        return validContracts[0]
+    } else {
+        return NULL
+    }
+}
+
+// Volume-based dominant contract selection
+def getDominantContractVolume(dailyData) {
+    if (exec count(*) from dailyData == 0) return NULL
+
+    volumeByContract = select symbol, sum(volume) as total_volume
+                      from dailyData
+                      group by symbol
+                      order by total_volume desc
+
+    if (exec count(*) from volumeByContract == 0) return NULL
+
+    dominantSymbol = exec symbol from volumeByContract limit 1
+    return dominantSymbol[0]
+}
+
+// Open Interest based dominant contract selection
+def getDominantContractOI(dailyData) {
+    if (exec count(*) from dailyData == 0) return NULL
+
+    // Use the last record of each contract for the day to get final OI
+    oiByContract = select symbol, last(open_interest) as final_oi
+                  from dailyData
+                  group by symbol
+                  order by final_oi desc
+
+    if (exec count(*) from oiByContract == 0) return NULL
+
+    dominantSymbol = exec symbol from oiByContract limit 1
+    return dominantSymbol[0]
+}
+
+// =============================================================================
+// MAIN PROCESSING - BUILD DOMINANT CONTRACT STREAMS
+// =============================================================================
+
+print("Building dominant contract streams from real 2023 data...")
+
+// Load real data
+yRawData = loadYContractData()
+mRawData = loadMContractData()
+
+// Get unique trading dates
+tradingDates = exec distinct trading_date from yRawData order by trading_date
+
+print("Processing " + string(size(tradingDates)) + " trading days...")
+
+// Get available contracts for calendar method
+if (ROLLOVER_METHOD == "CALENDAR") {
+    // Get all available Y contracts
+    allYContracts = exec distinct symbol from yRawData order by symbol
+
+    // Filter Y contracts (01,05,09 pattern)
+    contractsY = array(STRING, 0)
+    for (contract in allYContracts) {
+        if (strlen(contract) >= 5) {
+            contractMonthStr = substr(contract, 3, 2)
+            contractMonth = int(contractMonthStr)
+            if (contractMonth == 1 or contractMonth == 5 or contractMonth == 9) {
+                contractsY.append!(contract)
+            }
+        }
+    }
+
+    // Get all available M contracts
+    allMContracts = exec distinct symbol from mRawData order by symbol
+
+    // Filter M contracts (01,05,09 pattern)
+    contractsM = array(STRING, 0)
+    for (contract in allMContracts) {
+        if (strlen(contract) >= 5) {
+            contractMonthStr = substr(contract, 3, 2)
+            contractMonth = int(contractMonthStr)
+            if (contractMonth == 1 or contractMonth == 5 or contractMonth == 9) {
+                contractsM.append!(contract)
+            }
+        }
+    }
+
+    print("Filtered Y contracts for calendar method: " + string(contractsY))
+    print("Filtered M contracts for calendar method: " + string(contractsM))
+}
+
+// Process each trading day to build continuous dominant contract streams
+currentDominantY = ""
+currentDominantM = ""
+
+for (i in 0..(size(tradingDates)-1)) {
+    currentDate = tradingDates[i]
+
+    // Process Y contracts for this day
+    yDailyData = select * from yRawData where trading_date = currentDate
+    yRecordCount = exec count(*) from yDailyData
+
+    if (yRecordCount > 0) {
+        newDominantY = NULL
+
+        // Select dominant contract based on method
+        if (ROLLOVER_METHOD == "CALENDAR") {
+            newDominantY = getDominantContractCalendar(currentDate, contractsY,
+                                                     ROLLOVER_DAYS_BEFORE_EXPIRY_Y,
+                                                     CONTRACT_LISTING_MONTHS_AHEAD,
+                                                     MIN_TRADING_DAYS_REQUIRED)
+        } else if (ROLLOVER_METHOD == "VOLUME") {
+            newDominantY = getDominantContractVolume(yDailyData)
+        } else if (ROLLOVER_METHOD == "OPEN_INTEREST") {
+            newDominantY = getDominantContractOI(yDailyData)
+        }
+
+        if (newDominantY != NULL) {
+            newDominantYStr = string(newDominantY)
+
+            // Check for rollover
+            if (currentDominantY != "" and currentDominantY != newDominantYStr) {
+                // Record rollover
+                contractRollover.append!(table(now() as time,
+                                             "Y" as contract_type,
+                                             currentDominantY as old_symbol,
+                                             newDominantYStr as new_symbol,
+                                             ROLLOVER_METHOD + "-based rollover" as reason))
+            }
+            currentDominantY = newDominantYStr
+
+            // Get all data for the dominant contract and append
+            yDominantData = select * from yDailyData where symbol = newDominantY
+            dominantContractStreamY.append!(yDominantData)
+
+            // Get metric for display
+            if (ROLLOVER_METHOD == "VOLUME") {
+                yMetric = exec sum(volume) from yDominantData
+                print("Date: " + string(currentDate) + " - Y Dominant: " + string(newDominantY) +
+                      " (Volume: " + string(yMetric[0]) + ")")
+            } else if (ROLLOVER_METHOD == "OPEN_INTEREST") {
+                yMetric = exec last(open_interest) from yDominantData
+                print("Date: " + string(currentDate) + " - Y Dominant: " + string(newDominantY) +
+                      " (OI: " + string(yMetric[0]) + ")")
+            } else {
+                print("Date: " + string(currentDate) + " - Y Dominant: " + string(newDominantY) +
+                      " (Calendar-based)")
+            }
+        }
+    }
+
+    // Process M contracts for this day
+    mDailyData = select * from mRawData where trading_date = currentDate
+    mRecordCount = exec count(*) from mDailyData
+
+    if (mRecordCount > 0) {
+        newDominantM = NULL
+
+        // Select dominant contract based on method
+        if (ROLLOVER_METHOD == "CALENDAR") {
+            newDominantM = getDominantContractCalendar(currentDate, contractsM,
+                                                     ROLLOVER_DAYS_BEFORE_EXPIRY_M,
+                                                     CONTRACT_LISTING_MONTHS_AHEAD,
+                                                     MIN_TRADING_DAYS_REQUIRED)
+        } else if (ROLLOVER_METHOD == "VOLUME") {
+            newDominantM = getDominantContractVolume(mDailyData)
+        } else if (ROLLOVER_METHOD == "OPEN_INTEREST") {
+            newDominantM = getDominantContractOI(mDailyData)
+        }
+
+        if (newDominantM != NULL) {
+            newDominantMStr = string(newDominantM)
+
+            // Check for rollover
+            if (currentDominantM != "" and currentDominantM != newDominantMStr) {
+                // Record rollover
+                contractRollover.append!(table(now() as time,
+                                             "M" as contract_type,
+                                             currentDominantM as old_symbol,
+                                             newDominantMStr as new_symbol,
+                                             ROLLOVER_METHOD + "-based rollover" as reason))
+            }
+            currentDominantM = newDominantMStr
+
+            // Get all data for the dominant contract and append
+            mDominantData = select * from mDailyData where symbol = newDominantM
+            dominantContractStreamM.append!(mDominantData)
+
+            // Get metric for display
+            if (ROLLOVER_METHOD == "VOLUME") {
+                mMetric = exec sum(volume) from mDominantData
+                print("Date: " + string(currentDate) + " - M Dominant: " + string(newDominantM) +
+                      " (Volume: " + string(mMetric[0]) + ")")
+            } else if (ROLLOVER_METHOD == "OPEN_INTEREST") {
+                mMetric = exec last(open_interest) from mDominantData
+                print("Date: " + string(currentDate) + " - M Dominant: " + string(newDominantM) +
+                      " (OI: " + string(mMetric[0]) + ")")
+            } else {
+                print("Date: " + string(currentDate) + " - M Dominant: " + string(newDominantM) +
+                      " (Calendar-based)")
+            }
+        }
+    }
+}
+
+print("\n=== DOMINANT CONTRACT STREAM SUMMARY ===")
+print("Y contract stream records: " + string(exec count(*) from dominantContractStreamY))
+print("M contract stream records: " + string(exec count(*) from dominantContractStreamM))
+print("Rollover events: " + string(exec count(*) from contractRollover))
+
+rolloverCount = exec count(*) from contractRollover
+if (rolloverCount > 0) {
+    print("\nRollover events:")
+    print(select * from contractRollover order by time)
+}
+
+// Show sample data
+yRecordCount = exec count(*) from dominantContractStreamY
+if (yRecordCount > 0) {
+    print("\nSample Y dominant contract data:")
+    print(select top 10 * from dominantContractStreamY order by trading_date, datetime)
+}
+
+mRecordCount = exec count(*) from dominantContractStreamM
+if (mRecordCount > 0) {
+    print("\nSample M dominant contract data:")
+    print(select top 10 * from dominantContractStreamM order by trading_date, datetime)
+}
+
+print("\n✅ Dominant contract streams ready for trading strategies")

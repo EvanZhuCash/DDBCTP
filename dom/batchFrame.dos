@@ -1,0 +1,546 @@
+module FuturesOLHC::batchFrame
+use FuturesOLHC::tableSchema
+use FuturesOLHC::utils 
+
+def processRawData(pt, startDateTime, endDateTime){
+    res = select tradeTime, instruID, Market,
+        OpenPrice, PreCloPrice, HighPrice, LowPrice, 
+        LastPrice, Volume, OpenInt, Turnover, PreSetPrice,
+        ULimitPrice, LLimitPrice,
+        iif(SetPrice==NULL, lastPrice, SetPrice) as SetPrice,
+        iif(deltas(highPrice)>0.000001, 1, 0) as DeltasHighPrice,
+        iif(abs(deltas(lowPrice))>0.000001, -1, 0) as DeltasLowPrice,
+        iif(deltas(volume)==NULL, 0, deltas(volume)) as DeltasVolume,
+        iif(deltas(turnover)==NULL, 0, deltas(turnover)) as DeltasTurnover
+    from pt 
+    where tradeTime between startDateTime:endDateTime
+    context by instruID
+
+    yearStart = substr(year(today())$STRING, 2, 1)
+    update res set InstruID = iif(regexCount(instruID, "[[:digit:]]") == 3, substr(instruID, 0, regexFind(instruID, "[[:digit:]]")) + yearStart + substr(instruID, regexFind(instruID, "[[:digit:]]")), instruID)
+    return res
+}
+
+def computeKMin(mutable res, nMin){
+    res = select 
+        iif(firstNot(LastPrice, 0.0)==0.0, NULL, firstNot(LastPrice, 0.0)) as OpenPrice,
+        high(DeltasHighPrice, HighPrice, LastPrice) as HighPrice,
+        low(DeltasLowPrice, LowPrice, LastPrice) as LowPrice,
+        last(LastPrice) as ClosePrice,
+        last(Volume) as Volume,
+        last(Turnover) as Turnover,
+        sum(DeltasVolume) as DVolume,
+        sum(DeltasTurnover) as DTurnover,
+        last(PreCloPrice) as PreCloPrice,
+        last(OpenInt) as OpenInt,
+        max(PreSetPrice) as PreSetPrice,
+        last(SetPrice) as SetPrice,
+        max(ULimitPrice) as ULimitPrice,
+        max(LLimitPrice) as LLimitPrice
+    from res
+    group by instruID, Market, interval(X=tradeTime, duration = duration(string(nMin) + "m"), closed='right', label='right', fill=0) as TradeTime
+	
+    update res set instruID=upper(instruID)
+	update res set Code=regexReplace(instruID,"[0-9]","")
+    update res set ClearingDay = iif(time(TradeTime)>19:00:00.000, temporalAdd(date(TradeTime),1,`CFFEX), date(TradeTime))
+    update res set TradeDay = date(TradeTime)
+
+    return res
+}
+
+def fillKMin(mutable res, stdTb){
+    // 与标准分钟线对齐
+	res=select Code,
+            InstruID,
+            dt,
+            time(t3.min) as TradeTime,
+            Market,
+            ClearingDay,
+            TradeDay,
+            ClosePrice,
+            OpenPrice,
+            HighPrice,
+            LowPrice,
+            ULimitPrice,
+            LLimitPrice,
+            Volume,
+            Turnover,
+            DVolume,
+            DTurnover,
+            PreCloPrice,
+            OpenInt,
+            PreSetPrice,
+            SetPrice        
+        from stdTb as t3 left join res as t2
+        on t3.dt = date(t2.TradeTime) and time(t3.min) = time(t2.TradeTime) and t3.InstruID=t2.InstruID
+
+    // 补充指标数据
+    update res set Market = upper(Market)
+    update res set p = getMultiplier(Code, Market) 
+    update res set PreCloPrice = iif(PreCloPrice==0.0, cumlastNot(PreCloPrice, 0.0), PreCloPrice) context by InstruID
+
+    // 填充数据
+    res = select ClearingDay,TradeDay,InstruID,Code,Market,TradeTime, 
+            fillFunc(ClosePrice, PreCloPrice) as ClosePrice,
+            fillFunc(OpenPrice, PreCloPrice)  as OpenPrice,
+            fillFunc(HighPrice, PreCloPrice)  as HighPrice,
+            fillFunc(LowPrice, PreCloPrice) as LowPrice,
+            long(iif(DVolume<0,Volume, DVolume)) as Volume,
+            iif(DTurnover<0,Turnover,DTurnover) as Value, 
+            iif(DVolume == 0 or p < 0, ClosePrice, DTurnover/DVolume/p)as Vwap,
+            OpenInt,
+            PreSetPrice,
+            SetPrice,
+            ULimitPrice,LLimitPrice,
+            PreCloPrice        
+        from res
+        where p != -1
+        context by InstruID
+    update res set Vwap = ClosePrice where Vwap == 0.0
+    return select * from res order by TradeDay, TradeTime
+}
+
+def getFuturesKMin(dataType, dbname, tbname, startDate, endDate, nMin = 5) {  
+    flag = dataType + "_" + string(nMin) + "min"
+    prefix = "batch - " + flag 
+    // 1. 导入需要计算的原始数据
+    startDateTime, endDateTime = concatDateTime(startDate, 00:00:00.001), concatDateTime(endDate + 1, 00:00:00.000)
+    msg  = stringFormat("start loading raw data between %W and %W ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+
+    pt = loadTable(dbname, tbname) 
+    tempTB = processRawData(pt, startDateTime, endDateTime)
+    
+    msg  = stringFormat("loaded raw data between %W and %W done ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+    
+    // 2. 计算分钟线数据
+    msg  = stringFormat("start computing minute result between %W and %W ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+	
+    tempTB = computeKMin(tempTB, nMin)
+	
+    msg  = stringFormat("finished computing minute result between %W and %W ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+
+    //提取分钟频表中期货代码
+    codes = exec distinct(InstruID) as InstruID from tempTB order by InstruID
+    codes = table(regexReplace(codes,"[0-9]","") as code, codes as InstruID)
+
+    // 定义在时间段内应该存在的标准分钟线
+    msg  = stringFormat("start fill minute data between %W and %W ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+    tempTB1 = select * from cj(table((exec distinct TradeDay from tempTB) as dt), getFuturesTradeTime(nMin, codes)) where concatDateTime(dt, time(min)) between startDateTime:endDateTime
+    
+    res = fillKMin(tempTB, tempTB1)
+
+    msg  = stringFormat("finished fill minute data between %W and %W ...", string(startDateTime), string(endDateTime))
+    writeToLog(prefix, msg)
+
+    update res set SystemTime=now()
+	return res
+}
+
+/* -------------------------------------------  商品期货  ----------------------------------------------------- */
+//计算复权因子，result为主力分钟频K线表，temp为主力日频表
+def comdtyAdjustFactor(result, tempt) {
+    // 后复权
+    //确定需要更新的交易日
+    T=sort(exec distinct(ClearingDay) from tempt)
+    n=size(T)
+    //后复权首日因子为1
+    temImprove=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt
+    temImprove1=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt where ClearingDay>T[0]
+    temImprove0=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt where ClearingDay=T[0]
+    //左连表格，当日与前日对比，用于计算主连行情是否改变，计算当日复权
+    leftJoinImprove=select t.ClearingDay,
+                    t.Market,
+                    t.mainID,
+                    t.InstruID,
+                    t.ClosePrice,
+                    t.PreCloPrice,
+                    a.ClearingDay as forwardClearingDay,
+                    a.InstruID as forwardContractID,
+                    a.ClosePrice as forwardClosePrice,
+                    a.PreCloPrice as forwardPreCloPrice,
+                    t.backwardFactor
+                    from temImprove1 t, temImprove a 
+                    where t.ClearingDay=temporalAdd(a.ClearingDay, 1, `CFFEX) and t.Market=a.Market and t.mainID=a.mainID
+    adjustFactor=select 
+            ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,
+            iif(InstruID==forwardContractID or forwardContractID==NULL, backwardFactor ,backwardFactor*forwardClosePrice/PreCloPrice) as backwardFactor 
+        from leftJoinImprove
+    adjustFactor.append!(temImprove0)
+    //复权因子连乘
+    adjustFactor=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice, cumprod(backwardFactor) as backwardFactor from adjustFactor context by mainID csort ClearingDay
+    //左连表格时，首次出现的主连行情代码丢失，在此处找回，首次复权都为1不影响结果
+    miss=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,backwardFactor from (select * from temImprove t LEFT JOIN adjustFactor ta ON t.ClearingDay = ta.ClearingDay and t.mainID=ta.mainID where ta.mainID IS NULL )
+    adjustFactor.append!(miss)
+    //前复权
+    //temImprove计算所需的列，temImprove0最后一日前复权都为1，temImprove1前几日单独拿出
+    temImprove=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt
+    temImprove1=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt where ClearingDay<T[n-1]
+    temImprove0=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt where ClearingDay=T[n]
+    //左连表格，当日与前日对比，用于计算主连行情是否改变，计算当日复权
+    leftJoinImprove=select t.ClearingDay,
+                    t.Market,
+                    t.mainID,
+                    t.InstruID,
+                    t.ClosePrice,
+                    t.PreCloPrice,
+                    a.ClearingDay as backwardClearingDay,
+                    a.InstruID as backwardContractID,
+                    a.ClosePrice as backwardClosePrice,
+                    a.PreCloPrice as backwardPreCloPrice,
+                    t.forwardFactor
+                    from temImprove1 t, temImprove a
+                    where t.ClearingDay=temporalAdd(a.ClearingDay, -1, `CFFEX) and t.Market=a.Market and t.mainID=a.mainID
+    adjustFactorRes=select 
+        ClearingDay,Market,mainID,InstruID,ClosePrice, PreCloPrice,
+        iif(InstruID==backwardContractID or backwardContractID==NULL,forwardFactor ,forwardFactor*backwardPreCloPrice/ClosePrice) as forwardFactor 
+    from leftJoinImprove
+    adjustFactorRes.append!(temImprove0)
+    //复权因子连乘
+    adjustFactorRes=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice, cumprod(forwardFactor) as forwardFactor from adjustFactorRes context by mainID csort ClearingDay desc
+    //左连表格时，首次出现的主连行情代码丢失，在此处找回，首次复权都为1不影响结果
+    miss=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,forwardFactor from (select * from temImprove t LEFT JOIN adjustFactorRes ta ON t.ClearingDay = ta.ClearingDay and t.mainID=ta.mainID WHERE ta.mainID IS NULL )
+    adjustFactorRes.append!(miss)
+    //将前后复权因子以及对应OHLC价格加入终表
+    resultAdjustFactor=select * from lj(result r, adjustFactor a,`ClearingDay`Market`mainID`InstruID)
+    resultAdjustFactor=select * from lj(resultAdjustFactor r,adjustFactorRes ar,`ClearingDay`Market`mainID`InstruID)
+    resultAdjustFactor=select ClearingDay,
+                    TradeDay,
+                    Market,
+                    mainID,
+                    InstruID,
+                    nextContractID,
+                    BarTime,
+                    ClosePrice,
+                    OpenPrice,
+                    HighPrice,
+                    LowPrice,
+                    SetPrice,
+                    ULimitPrice,
+                    LLimitPrice,
+                    Volume,
+                    Value,
+                    OpenInt,
+                    PreSetPrice,
+                    PreCloPrice,
+                    backwardFactor,
+                    forwardFactor,
+                    backwardFactor*ClosePrice as backwardFactorClosePrice,
+                    backwardFactor*OpenPrice as backwardFactorOpenPrice,
+                    backwardFactor*HighPrice as backwardFactorHighPrice,
+                    backwardFactor*LowPrice as backwardFactorLowPrice,
+                    forwardFactor*ClosePrice as forwardFactorClosePrice,
+                    forwardFactor*OpenPrice as forwardFactorOpenPrice,
+                    forwardFactor*HighPrice as forwardFactorHighPrice,
+                    forwardFactor*LowPrice as forwardFactorLowPrice
+                from resultAdjustFactor
+    update resultAdjustFactor set SystemTime=now()
+    return resultAdjustFactor 
+}
+
+//计算startDate到endDate的主连行情 min=NULL时为1分钟频数据
+defg comdtyZlFuturesKMin(minDbname, minTbname, zlDbname, zlTbname, startDate, endDate, nMin=5) {
+    startDate1=temporalAdd(startDate,-1,`CFFEX)
+    endDate1=temporalAdd(endDate,-1,`CFFEX)
+    //从comdty_marketdata_realtime/future_pricemin库表中导入startDate1到endDate的分钟频数据
+    res=select * from loadTable(minDbname,minTbname) where ClearingDay between startDate1 and endDate
+    //确定需要计算的交易日
+    T=sort(exec distinct(ClearingDay) from res)
+    //计算每日结束时的成交量
+    resVolume=select sum(Volume) as sumVolume from res group by ClearingDay,InstruID
+    res = select * from res, resVolume r where res.ClearingDay=r.ClearingDay and res.InstruID=r.InstruID
+    
+    //商品期货主力为最大（持仓+成交量）
+    tb = select InstruID, max(OpenInt+sumVolume) as totalOpenInt from res where ClearingDay between startDate1 and endDate1 group by ClearingDay,Code,InstruID order by ClearingDay,Code,totalOpenInt desc
+
+    //提取当日主力
+    tb=select first(InstruID) as InstruID, max(totalOpenInt) as totalOpenInt from tb group by ClearingDay,Code
+    //提取startDate到endDate分钟频数据
+    tb2 = select last(ClosePrice) ClosePrice, 
+                first(OpenPrice) OpenPrice, 
+                max(HighPrice) HighPrice, 
+                min(LowPrice) LowPrice, 
+                last(SetPrice) SetPrice,
+                max(ULimitPrice) ULimitPrice,
+                min(LLimitPrice) LLimitPrice, 
+                last(Volume) Volume, 
+                last(Value) Value, 
+                last(OpenInt) OpenInt, 
+                max(PreSetPrice) PreSetPrice, 
+                max(PreCloPrice) PreCloPrice 
+                from res where ClearingDay between startDate and endDate group by ClearingDay, TradeDay, Code, InstruID, Market, BarTime
+    //tb2中当日主力根据tb中前一日主力代码确定
+    result=select tb2.ClearingDay,TradeDay,Market,Code as mainID,InstruID,BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice 
+                from tb2,tb where tb2.ClearingDay=temporalAdd(tb.ClearingDay,1,`CFFEX) and tb2.Code=tb.Code and tb2.InstruID=tb.InstruID 
+    result=select ClearingDay,
+                TradeDay,Market,
+                Code as mainID,
+                r.InstruID,
+                t.InstruID as nextContractID,
+                BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice
+                from result r, tb t where r.ClearingDay=temporalAdd(t.ClearingDay,1,`CFFEX) and r.mainID=t.Code
+    //res1提取了历史主连行情，并与新的主连行情合并
+    res1=select ClearingDay,TradeDay,Market,mainID,InstruID,nextContractID,BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice
+            from loadTable(zlDbname,zlTbname) where ClearingDay<startDate
+    result=res1.append!(result)
+    //计算复权因子需要tempt表，作为日频数据
+    d0=select last(ClosePrice) as ClosePrice, 
+                first(OpenPrice) as OpenPrice, 
+                max(HighPrice) as HighPrice, 
+                min(LowPrice) as LowPrice, 
+                last(SetPrice) as SetPrice,
+                max(ULimitPrice) as ULimitPrice,
+                min(LLimitPrice) as LLimitPrice, 
+                last(Volume) as Volume, 
+                last(Value) as Value, 
+                last(OpenInt) as OpenInt, 
+                last(PreSetPrice) as PreSetPrice, 
+                last(PreCloPrice) as PreCloPrice
+                from result group by ClearingDay,TradeDay,Market,mainID,InstruID,BarTime order by Market
+    tempt=select last(ClosePrice) as ClosePrice,last(PreCloPrice) as PreCloPrice
+            from d0 group by ClearingDay,Market,mainID,InstruID order by Market
+    result=comdtyAdjustFactor(result, tempt)
+    return result
+}
+
+/* ------------------------------------------  国债期货 ----------------------------------------------------------- */
+//计算复权因子，result为主力分钟频K线表，temp为主力日频表
+def rtAdjustFactor(result, tempt){
+    // 后复权
+    //确定需要更新的交易日
+    T=sort(exec distinct(ClearingDay) from tempt)
+    n=size(T)
+    //后复权首日因子为1
+    temImprove=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt
+    temImprove1=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt where ClearingDay>T[0]
+    temImprove0=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as backwardFactor from tempt where ClearingDay=T[0]
+    //左连表格，当日与前日对比，用于计算主连行情是否改变，计算当日复权
+    leftJoinImprove=select t.ClearingDay,
+                    t.Market,
+                    t.mainID,
+                    t.InstruID,
+                    t.ClosePrice,
+                    t.PreCloPrice,
+                    a.ClearingDay as forwardClearingDay,
+                    a.InstruID as forwardContractID,
+                    a.ClosePrice as forwardClosePrice,
+                    a.PreCloPrice as forwardPreCloPrice,
+                    t.backwardFactor
+                    from temImprove1 t, temImprove a 
+                    where t.ClearingDay=temporalAdd(a.ClearingDay, 1, `CFFEX) and t.Market=a.Market and t.mainID=a.mainID
+    adjustFactor=select 
+            ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,
+            iif(InstruID==forwardContractID or forwardContractID==NULL, backwardFactor ,backwardFactor*forwardClosePrice/PreCloPrice) as backwardFactor 
+        from leftJoinImprove
+    adjustFactor.append!(temImprove0)
+    //复权因子连乘
+    adjustFactor=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice, cumprod(backwardFactor) as backwardFactor from adjustFactor context by mainID csort ClearingDay
+    //左连表格时，首次出现的主连行情代码丢失，在此处找回，首次复权都为1不影响结果
+    miss=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,backwardFactor from (select * from temImprove t LEFT JOIN adjustFactor ta ON t.ClearingDay = ta.ClearingDay and t.mainID=ta.mainID where ta.mainID IS NULL )
+    adjustFactor.append!(miss)
+            //前复权
+            //temImprove计算所需的列，temImprove0最后一日前复权都为1，temImprove1前几日单独拿出
+        temImprove=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt
+        temImprove1=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt where ClearingDay<T[n-1]
+        temImprove0=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,1.0 as forwardFactor from tempt where ClearingDay=T[n]
+        //左连表格，当日与前日对比，用于计算主连行情是否改变，计算当日复权
+        leftJoinImprove=select t.ClearingDay,
+                        t.Market,
+                        t.mainID,
+                        t.InstruID,
+                        t.ClosePrice,
+                        t.PreCloPrice,
+                        a.ClearingDay as backwardClearingDay,
+                        a.InstruID as backwardContractID,
+                        a.ClosePrice as backwardClosePrice,
+                        a.PreCloPrice as backwardPreCloPrice,
+                        t.forwardFactor
+                        from temImprove1 t, temImprove a
+                        where t.ClearingDay=temporalAdd(a.ClearingDay, -1, `CFFEX) and t.Market=a.Market and t.mainID=a.mainID
+        adjustFactorRes=select 
+            ClearingDay,Market,mainID,InstruID,ClosePrice, PreCloPrice,
+            iif(InstruID==backwardContractID or backwardContractID==NULL,forwardFactor ,forwardFactor*backwardPreCloPrice/ClosePrice) as forwardFactor 
+        from leftJoinImprove
+    adjustFactorRes.append!(temImprove0)
+    //复权因子连乘
+    adjustFactorRes=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice, cumprod(forwardFactor) as forwardFactor from adjustFactorRes context by mainID csort ClearingDay desc
+    //左连表格时，首次出现的主连行情代码丢失，在此处找回，首次复权都为1不影响结果
+    miss=select ClearingDay,Market,mainID,InstruID,ClosePrice,PreCloPrice,forwardFactor from (select * from temImprove t LEFT JOIN adjustFactorRes ta ON t.ClearingDay = ta.ClearingDay and t.mainID=ta.mainID WHERE ta.mainID IS NULL )
+    adjustFactorRes.append!(miss)
+    //将前后复权因子以及对应OHLC价格加入终表
+    resultAdjustFactor=select * from lj(result r, adjustFactor a,`ClearingDay`Market`mainID`InstruID)
+    resultAdjustFactor=select * from lj(resultAdjustFactor r,adjustFactorRes ar,`ClearingDay`Market`mainID`InstruID)
+    resultAdjustFactor=select ClearingDay,
+                    TradeDay,
+                    Market,
+                    mainID,
+                    InstruID,
+                    nextContractID,
+                    BarTime,
+                    ClosePrice,
+                    OpenPrice,
+                    HighPrice,
+                    LowPrice,
+                    SetPrice,
+                    ULimitPrice,
+                    LLimitPrice,
+                    Volume,
+                    Value,
+                    OpenInt,
+                    PreSetPrice,
+                    PreCloPrice,
+                    backwardFactor,
+                    forwardFactor,
+                    backwardFactor*ClosePrice as backwardFactorClosePrice,
+                    backwardFactor*OpenPrice as backwardFactorOpenPrice,
+                    backwardFactor*HighPrice as backwardFactorHighPrice,
+                    backwardFactor*LowPrice as backwardFactorLowPrice,
+                    forwardFactor*ClosePrice as forwardFactorClosePrice,
+                    forwardFactor*OpenPrice as forwardFactorOpenPrice,
+                    forwardFactor*HighPrice as forwardFactorHighPrice,
+                    forwardFactor*LowPrice as forwardFactorLowPrice
+                from resultAdjustFactor
+    update resultAdjustFactor set SystemTime=now()
+    return resultAdjustFactor 
+}
+
+//计算startDate到endDate的主连行情
+defg rtZlFuturesKMin(minDbname, minTbname, zlDbname, zlTbname,startDate,endDate, nMin=5) {
+    //temporalAdd（）是自由函数，计算出日历上前一个交易日的日期
+    startDate1=temporalAdd(startDate,-1,`CFFEX)
+    endDate1=temporalAdd(endDate,-1,`CFFEX)
+    //从rt_marketdata_realtime/future_pricemin库表中导入startDate1到endDate的分钟频数据
+    res=select * from loadTable(minDbname, minTbname) where ClearingDay between startDate1 and endDate
+    //确定需要计算的交易日
+    T=sort(exec distinct(ClearingDay) from res)
+    //计算每日结束时的成交量
+    resVolume=select sum(Volume) as sumVolume from res group by ClearingDay,Code
+    res = select * from res, resVolume r where res.ClearingDay=r.ClearingDay and res.Code=r.Code
+    //国债单独拿出，主力为最大持仓
+    CN=[`T,`TS,`TF,`TL]
+    tb=select InstruID, max(OpenInt) as totalOpenInt from res  where ClearingDay between startDate1 and endDate1 and Code in CN group by ClearingDay,Code,InstruID order by ClearingDay,Code,totalOpenInt desc
+    //提取当日主力
+    tb=select first(InstruID) as InstruID, max(totalOpenInt) as totalOpenInt from tb group by ClearingDay,Code
+    //提取startDate到endDate分钟频数据
+    tb2 = select last(ClosePrice) ClosePrice, 
+                first(OpenPrice) OpenPrice, 
+                max(HighPrice) HighPrice, 
+                min(LowPrice) LowPrice, 
+                last(SetPrice) SetPrice,
+                max(ULimitPrice) ULimitPrice,
+                min(LLimitPrice) LLimitPrice, 
+                last(Volume) Volume, 
+                last(Value) Value, 
+                last(OpenInt) OpenInt, 
+                max(PreSetPrice) PreSetPrice, 
+                max(PreCloPrice) PreCloPrice 
+                from res  where ClearingDay between startDate and endDate group by ClearingDay as ClearingDay,tradeDay,Code,InstruID,Market,BarTime
+    //tb2中当日主力根据tb中前一日主力代码确定
+    result=select tb2.ClearingDay,tradeDay,Market,Code as mainID,InstruID,BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice 
+                from tb2,tb where tb2.ClearingDay=temporalAdd(tb.ClearingDay,1,`CFFEX) and tb2.Code=tb.Code and tb2.InstruID=tb.InstruID 
+    result=select ClearingDay,
+                tradeDay,Market,
+                Code as mainID,
+                r.InstruID,
+                t.InstruID as nextContractID,
+                BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice
+                from result r, tb t where r.ClearingDay=temporalAdd(t.ClearingDay,1,`CFFEX) and r.mainID=t.Code
+    //res1提取了历史主连行情，并与新的主连行情合并
+    res1=select ClearingDay,TradeDay,Market,mainID,InstruID,nextContractID,BarTime,
+                ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice
+            from loadTable(zlDbname,zlTbname) where ClearingDay<startDate
+    result=res1.append!(result)
+    //计算复权因子需要tempt表，作为日频数据
+    d0=select ClosePrice, 
+                OpenPrice, 
+                HighPrice, 
+                LowPrice, 
+                SetPrice,
+                ULimitPrice,
+                LLimitPrice, 
+                Volume, 
+                Value, 
+                OpenInt, 
+                PreSetPrice, 
+                PreCloPrice
+                from result group by ClearingDay,TradeDay,Market,mainID,InstruID,BarTime order by Market
+    tempt=select last(ClosePrice) as ClosePrice,last(PreCloPrice) as PreCloPrice
+            from d0 group by ClearingDay,Market,mainID,InstruID order by Market
+    result=rtAdjustFactor(result, tempt)
+    return result
+}
